@@ -29,7 +29,8 @@ AI coding agents make dozens of API calls per interaction — streaming messages
 ## Quick Start
 
 ```bash
-npx watchtower-ai
+npm install -g watchtower-ai
+watchtower-ai
 ```
 
 Or clone and run directly:
