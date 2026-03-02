@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Code Interceptor</title>
+<title>Watchtower</title>
 <style>
   :root {
     --bg: #0a0a0f;
@@ -28,6 +28,70 @@
     --pink: #f472b6;
     --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    /* Tinted backgrounds for badges, tags, message headers */
+    --tint-blue: #1e3a5f;
+    --tint-green: #1a3a1a;
+    --tint-neutral: #333;
+    --tint-neutral-text: #999;
+    --tint-anthropic-bg: #1a2a1a;
+    --tint-anthropic-text: #d4a574;
+    --tint-openai-bg: #1a1a2e;
+    --tint-openai-text: #74b9ff;
+    --tint-subagent-bg: #1e1040;
+    --tint-subagent-text: #b4a0ff;
+    --tint-utility-bg: #1a1a1a;
+    --tint-user-bg: #1a2332;
+    --tint-assistant-bg: #1f1a2e;
+    --tint-developer-bg: #1a2a1a;
+    --tint-system-bg: #2a2a1a;
+    --tint-ping-text: #666;
+    --tint-tool-call-bg: rgba(244, 114, 182, 0.04);
+    --tint-subagent-row: rgba(124, 106, 239, 0.03);
+    --tint-subagent-row-hover: rgba(124, 106, 239, 0.08);
+    --accent-light: #c4b5fd;
+  }
+
+  [data-theme="light"] {
+    --bg: #f5f5f7;
+    --bg-card: #ffffff;
+    --bg-hover: #eeeef2;
+    --bg-panel: #f0f0f4;
+    --border: #d8d8e0;
+    --border-active: #b0b0c0;
+    --text: #1a1a2e;
+    --text-dim: #6b6b80;
+    --text-label: #555568;
+    --accent: #6550e8;
+    --accent-dim: #e8e4fd;
+    --green: #16a34a;
+    --green-dim: #dcfce7;
+    --yellow: #ca8a04;
+    --yellow-dim: #fef9c3;
+    --red: #dc2626;
+    --red-dim: #fee2e2;
+    --cyan: #0891b2;
+    --orange: #ea580c;
+    --pink: #db2777;
+    --tint-blue: #dbeafe;
+    --tint-green: #dcfce7;
+    --tint-neutral: #e5e5ea;
+    --tint-neutral-text: #666;
+    --tint-anthropic-bg: #fef3c7;
+    --tint-anthropic-text: #92400e;
+    --tint-openai-bg: #dbeafe;
+    --tint-openai-text: #1e40af;
+    --tint-subagent-bg: #ede9fe;
+    --tint-subagent-text: #5b21b6;
+    --tint-utility-bg: #f0f0f4;
+    --tint-user-bg: #e0f2fe;
+    --tint-assistant-bg: #ede9fe;
+    --tint-developer-bg: #dcfce7;
+    --tint-system-bg: #fef9c3;
+    --tint-ping-text: #999;
+    --tint-tool-call-bg: rgba(219, 39, 119, 0.06);
+    --tint-subagent-row: rgba(101, 80, 232, 0.04);
+    --tint-subagent-row-hover: rgba(101, 80, 232, 0.10);
+    --accent-light: #6550e8;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -76,7 +140,7 @@
   }
 
   .header-stats {
-    display: flex; gap: 20px; font-size: 12px; color: var(--text-dim);
+    display: flex; align-items: center; gap: 20px; font-size: 12px; color: var(--text-dim);
     font-family: var(--mono);
   }
   .header-stats .val { color: var(--text); font-weight: 600; }
@@ -125,11 +189,27 @@
     font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
     text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--mono);
   }
-  .badge-messages_stream { background: var(--accent-dim); color: #e0d4ff; }
+  .badge-messages_stream { background: var(--accent-dim); color: var(--accent-light); }
   .badge-quota_check { background: var(--yellow-dim); color: var(--yellow); }
   .badge-token_count { background: var(--green-dim); color: var(--green); }
-  .badge-messages { background: #1e3a5f; color: var(--cyan); }
-  .badge-unknown { background: #333; color: #999; }
+  .badge-messages { background: var(--tint-blue); color: var(--cyan); }
+  .badge-chat_stream { background: var(--tint-green); color: var(--green); }
+  .badge-chat_completion { background: var(--tint-blue); color: var(--cyan); }
+  .badge-completion_stream { background: var(--tint-green); color: var(--green); }
+  .badge-completion { background: var(--tint-blue); color: var(--cyan); }
+  .badge-responses_stream { background: var(--tint-green); color: var(--green); }
+  .badge-responses { background: var(--tint-blue); color: var(--cyan); }
+  .badge-models { background: var(--tint-neutral); color: var(--tint-neutral-text); }
+  .badge-embeddings { background: var(--yellow-dim); color: var(--yellow); }
+  .badge-unknown { background: var(--tint-neutral); color: var(--tint-neutral-text); }
+
+  .provider-tag {
+    font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--mono);
+    margin-left: 4px;
+  }
+  .provider-tag.anthropic { background: var(--tint-anthropic-bg); color: var(--tint-anthropic-text); }
+  .provider-tag.openai { background: var(--tint-openai-bg); color: var(--tint-openai-text); }
 
   .req-model { font-size: 12px; font-weight: 600; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .req-meta { font-size: 10px; color: var(--text-dim); font-family: var(--mono); display: flex; gap: 8px; }
@@ -146,9 +226,9 @@
     padding-left: 28px;
     border-left: 2px solid var(--accent-dim);
     margin-left: 12px;
-    background: rgba(124, 106, 239, 0.03);
+    background: var(--tint-subagent-row);
   }
-  .request-item.subagent:hover { background: rgba(124, 106, 239, 0.08); }
+  .request-item.subagent:hover { background: var(--tint-subagent-row-hover); }
   .request-item.subagent.active { border-left: 3px solid var(--accent); margin-left: 11px; }
 
   .request-item.utility-child {
@@ -164,9 +244,9 @@
     text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--mono);
     margin-left: 4px;
   }
-  .agent-role-tag.main { background: #1a3a1a; color: var(--green); }
-  .agent-role-tag.subagent { background: #1e1040; color: #b4a0ff; }
-  .agent-role-tag.utility { background: #1a1a1a; color: var(--text-dim); }
+  .agent-role-tag.main { background: var(--tint-green); color: var(--green); }
+  .agent-role-tag.subagent { background: var(--tint-subagent-bg); color: var(--tint-subagent-text); }
+  .agent-role-tag.utility { background: var(--tint-utility-bg); color: var(--text-dim); }
 
   /* ── Main panel ────────────────────────────────────── */
   .main {
@@ -303,8 +383,10 @@
     justify-content: space-between;
     align-items: center;
   }
-  .message.user .message-header { background: #1a2332; color: var(--cyan); }
-  .message.assistant .message-header { background: #1f1a2e; color: var(--accent); }
+  .message.user .message-header { background: var(--tint-user-bg); color: var(--cyan); }
+  .message.assistant .message-header { background: var(--tint-assistant-bg); color: var(--accent); }
+  .message.developer .message-header { background: var(--tint-developer-bg); color: var(--green); }
+  .message.system .message-header { background: var(--tint-system-bg); color: var(--yellow); }
 
   .message-body {
     padding: 10px 12px;
@@ -371,7 +453,7 @@
     font-family: var(--mono);
   }
   .tool-item-icon.builtin { background: var(--green-dim); color: var(--green); }
-  .tool-item-icon.mcp { background: var(--accent-dim); color: #c4b5fd; }
+  .tool-item-icon.mcp { background: var(--accent-dim); color: var(--accent-light); }
 
   .tool-item-info { flex: 1; min-width: 0; }
 
@@ -384,7 +466,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .tool-item.mcp-tool .tool-item-name { color: #c4b5fd; }
+  .tool-item.mcp-tool .tool-item-name { color: var(--accent-light); }
 
   .tool-item-oneliner {
     font-size: 11px;
@@ -539,13 +621,24 @@
     font-size: 9px;
     text-transform: uppercase;
   }
-  .sse-type.message_start { background: #1e3a5f; color: var(--cyan); }
-  .sse-type.message_stop { background: #1e3a5f; color: var(--cyan); }
-  .sse-type.message_delta { background: #1e3a5f; color: var(--cyan); }
+  .sse-type.message_start { background: var(--tint-blue); color: var(--cyan); }
+  .sse-type.message_stop { background: var(--tint-blue); color: var(--cyan); }
+  .sse-type.message_delta { background: var(--tint-blue); color: var(--cyan); }
   .sse-type.content_block_start { background: var(--green-dim); color: var(--green); }
   .sse-type.content_block_stop { background: var(--green-dim); color: var(--green); }
-  .sse-type.content_block_delta { background: var(--accent-dim); color: #c4b5fd; }
-  .sse-type.ping { background: #333; color: #666; }
+  .sse-type.content_block_delta { background: var(--accent-dim); color: var(--accent); }
+  .sse-type.ping { background: var(--tint-neutral); color: var(--tint-ping-text); }
+  .sse-type.chat_chunk { background: var(--green-dim); color: var(--green); }
+  .sse-type.done { background: var(--tint-neutral); color: var(--tint-neutral-text); }
+  .sse-type.data { background: var(--accent-dim); color: var(--accent); }
+  /* Responses API SSE types */
+  .sse-type.response\.output_text\.delta { background: var(--green-dim); color: var(--green); }
+  .sse-type.response\.output_text\.done { background: var(--green-dim); color: var(--green); }
+  .sse-type.response\.function_call_arguments\.delta { background: var(--accent-dim); color: var(--accent); }
+  .sse-type.response\.function_call_arguments\.done { background: var(--accent-dim); color: var(--accent); }
+  .sse-type.response\.created { background: var(--tint-blue); color: var(--cyan); }
+  .sse-type.response\.completed { background: var(--tint-blue); color: var(--cyan); }
+  .sse-type.response\.done { background: var(--tint-blue); color: var(--cyan); }
 
   .sse-data {
     flex: 1;
@@ -620,7 +713,7 @@
   .cache-badge {
     font-size: 8px;
     background: var(--accent-dim);
-    color: #c4b5fd;
+    color: var(--accent-light);
     padding: 1px 5px;
     border-radius: 3px;
   }
@@ -727,7 +820,7 @@
     align-items: center;
     gap: 10px;
     border-bottom: 1px solid var(--border);
-    background: rgba(244, 114, 182, 0.04);
+    background: var(--tint-tool-call-bg);
   }
 
   .tool-call-name {
@@ -809,7 +902,7 @@
     padding: 3px 10px;
     border-radius: 4px;
     background: var(--accent-dim);
-    color: #c4b5fd;
+    color: var(--accent-light);
   }
 
   .resp-meta-row {
@@ -853,7 +946,31 @@
   .json-number { color: var(--orange); }
   .json-bool { color: var(--pink); }
   .json-null { color: var(--text-dim); }
+
+  /* ── Theme toggle ───────────────────────────────────── */
+  .theme-toggle {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text);
+    transition: background 0.15s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .theme-toggle:hover { background: var(--bg-panel); border-color: var(--border-active); }
 </style>
+<script>
+  // Apply theme before first paint to prevent flash
+  (function() {
+    var t = localStorage.getItem('watchtower-theme');
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 </head>
 <body>
 <div class="app">
@@ -861,12 +978,15 @@
   <div class="header">
     <div class="header-left">
       <div class="status-dot" id="statusDot"></div>
-      <div class="logo"><span>Claude</span> Interceptor</div>
+      <div class="logo"><span>Watch</span>tower</div>
     </div>
     <div class="header-stats" id="headerStats">
       <div>Requests: <span class="val" id="statReqs">0</span></div>
       <div>SSE Events: <span class="val" id="statEvents">0</span></div>
       <div>Uptime: <span class="val" id="statUptime">0s</span></div>
+      <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+        <span id="themeIcon">&#9790;</span>
+      </button>
     </div>
   </div>
 
@@ -886,13 +1006,29 @@
       <div class="empty-state">
         <div>Waiting for requests...</div>
         <code>ANTHROPIC_BASE_URL=http://localhost:8024 claude</code>
-        <div style="margin-top: 8px; font-size: 12px;">Run Claude Code with the env var above to start intercepting</div>
+        <code>OPENAI_BASE_URL=http://localhost:8024 codex</code>
+        <div style="margin-top: 8px; font-size: 12px;">Point Claude Code or Codex CLI at the proxy to start monitoring</div>
       </div>
     </div>
   </div>
 </div>
 
 <script>
+// ─── Theme ──────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = document.getElementById('themeIcon');
+  if (icon) icon.innerHTML = theme === 'light' ? '&#9728;' : '&#9790;';
+}
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('watchtower-theme', next);
+  applyTheme(next);
+}
+// Apply saved theme immediately
+applyTheme(localStorage.getItem('watchtower-theme') || 'dark');
+
 // ─── State ──────────────────────────────────────────────────────────
 const state = {
   requests: new Map(),
@@ -940,6 +1076,7 @@ function handleWsMessage(msg) {
   if (event === 'request_start') {
     state.requests.set(data.id, {
       ...data,
+      provider: data.provider || 'anthropic',
       status: null,
       duration: null,
       sseEvents: [],
@@ -1015,12 +1152,15 @@ function renderSidebar() {
     const roleTag = role !== 'utility'
       ? `<span class="agent-role-tag ${role}">${role}</span>`
       : (r.parentId ? `<span class="agent-role-tag utility">util</span>` : '');
+    const providerTag = r.provider === 'openai'
+      ? '<span class="provider-tag openai">OAI</span>'
+      : (r.provider === 'anthropic' ? '<span class="provider-tag anthropic">ANT</span>' : '');
 
     return `
     <div class="request-item ${indentClass} ${activeClass}" onclick="selectRequest(${r.id})">
       ${r.streaming ? '<div class="req-streaming"></div>' : ''}
       <div class="req-top">
-        <span class="req-id">#${r.id}${roleTag}</span>
+        <span class="req-id">#${r.id}${providerTag}${roleTag}</span>
         <span class="req-badge badge-${r.type}">${r.type.replace('_', ' ')}</span>
       </div>
       <div class="req-model">${r.model || 'unknown'}</div>
@@ -1115,6 +1255,69 @@ function renderTabContent(req) {
   }
 }
 
+// ─── Unified helpers (provider-agnostic) ────────────────────────────
+function getUsage(req) {
+  // Anthropic: message_delta or message_start event
+  const msgDelta = req.sseEvents?.find(e => e.type === 'message_delta');
+  if (msgDelta?.data?.usage) return msgDelta.data.usage;
+  const msgStart = req.sseEvents?.find(e => e.type === 'message_start');
+  if (msgStart?.data?.message?.usage) return msgStart.data.message.usage;
+  // OpenAI: any event with usage, or responseBody
+  const usageEv = req.sseEvents?.find(e => e.data?.usage);
+  if (usageEv?.data?.usage) return usageEv.data.usage;
+  // OpenAI Responses API: response.completed/done event
+  const completed = req.sseEvents?.find(e => e.type === 'response.completed' || e.type === 'response.done');
+  if (completed?.data?.response?.usage) return completed.data.response.usage;
+  if (completed?.data?.usage) return completed.data.usage;
+  // Non-streaming response body
+  if (req.responseBody?.usage) return req.responseBody.usage;
+  return null;
+}
+
+function getResponseMeta(req) {
+  const meta = [];
+  // Anthropic: message_start
+  const msgStart = req.sseEvents?.find(e => e.type === 'message_start');
+  const m = msgStart?.data?.message;
+  if (m) {
+    if (m.id) meta.push(['Message ID', m.id]);
+    if (m.model) meta.push(['Model', m.model]);
+    if (m.role) meta.push(['Role', m.role]);
+    if (m.usage) {
+      for (const [k, v] of Object.entries(m.usage)) {
+        const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+        meta.push(['initial.' + k, display]);
+      }
+    }
+  }
+  // Anthropic: message_delta
+  const msgDelta = req.sseEvents?.find(e => e.type === 'message_delta');
+  if (msgDelta?.data?.delta?.stop_reason) meta.push(['Stop Reason', msgDelta.data.delta.stop_reason]);
+  if (msgDelta?.data?.delta?.stop_sequence !== undefined) meta.push(['Stop Sequence', msgDelta.data.delta.stop_sequence === null ? 'null' : String(msgDelta.data.delta.stop_sequence)]);
+  if (msgDelta?.data?.context_management) meta.push(['Context Mgmt', JSON.stringify(msgDelta.data.context_management)]);
+
+  // OpenAI Chat Completions: first/last chunks
+  const firstChunk = req.sseEvents?.find(e => e.data?.id && e.data?.object);
+  if (firstChunk?.data) {
+    if (firstChunk.data.id && !m) meta.push(['Completion ID', firstChunk.data.id]);
+    if (firstChunk.data.model && !m) meta.push(['Model', firstChunk.data.model]);
+    if (firstChunk.data.system_fingerprint) meta.push(['System Fingerprint', firstChunk.data.system_fingerprint]);
+  }
+  const lastChoice = req.sseEvents?.findLast?.(e => e.data?.choices?.[0]?.finish_reason);
+  if (lastChoice) meta.push(['Finish Reason', lastChoice.data.choices[0].finish_reason]);
+
+  // OpenAI Responses API: response.completed/done events
+  const completed = req.sseEvents?.find(e => e.type === 'response.completed' || e.type === 'response.done');
+  const resp = completed?.data?.response || completed?.data;
+  if (resp && !m && !firstChunk?.data?.id) {
+    if (resp.id) meta.push(['Response ID', resp.id]);
+    if (resp.model) meta.push(['Model', resp.model]);
+    if (resp.status) meta.push(['Status', resp.status]);
+  }
+
+  return meta;
+}
+
 // ─── Tab: Overview ──────────────────────────────────────────────────
 function renderOverview(req) {
   // ── Request info ──
@@ -1146,14 +1349,19 @@ function renderOverview(req) {
   // ── API headers (important fields) ──
   const apiHeaders = [];
   const rh = req.requestHeaders || {};
+  if (req.provider) apiHeaders.push(['Provider', req.provider]);
   if (rh['anthropic-version']) apiHeaders.push(['anthropic-version', rh['anthropic-version']]);
   if (rh['anthropic-beta']) apiHeaders.push(['anthropic-beta', rh['anthropic-beta']]);
+  if (rh['openai-organization']) apiHeaders.push(['openai-organization', rh['openai-organization']]);
   if (rh['user-agent']) apiHeaders.push(['user-agent', rh['user-agent']]);
   if (rh['x-app']) apiHeaders.push(['x-app', rh['x-app']]);
 
   const respH = req.responseHeaders || {};
   if (respH['request-id']) apiHeaders.push(['request-id', respH['request-id']]);
+  if (respH['x-request-id']) apiHeaders.push(['request-id', respH['x-request-id']]);
   if (respH['anthropic-organization-id']) apiHeaders.push(['organization-id', respH['anthropic-organization-id']]);
+  if (respH['openai-organization']) apiHeaders.push(['organization', respH['openai-organization']]);
+  if (respH['openai-processing-ms']) apiHeaders.push(['processing-time', respH['openai-processing-ms'] + 'ms']);
   if (respH['x-envoy-upstream-service-time']) apiHeaders.push(['upstream-time', respH['x-envoy-upstream-service-time'] + 'ms']);
 
   if (apiHeaders.length) {
@@ -1164,19 +1372,24 @@ function renderOverview(req) {
     html += `</div></div></div>`;
   }
 
-  // ── Beta features (parsed from anthropic-beta header) ──
+  // ── Features / flags (from provider-specific headers) ──
+  const featureFlags = [];
   if (rh['anthropic-beta']) {
-    const betas = rh['anthropic-beta'].split(',').map(s => s.trim());
-    html += `<div class="section"><div class="section-header" onclick="toggleSection(this)">Beta Features <span class="toggle">hide</span></div><div class="section-body" style="display: flex; flex-wrap: wrap; gap: 6px;">`;
-    for (const beta of betas) {
-      html += `<span style="font-family: var(--mono); font-size: 10px; padding: 3px 8px; background: var(--accent-dim); color: #c4b5fd; border-radius: 4px;">${esc(beta)}</span>`;
+    rh['anthropic-beta'].split(',').map(s => s.trim()).forEach(f => featureFlags.push(f));
+  }
+  if (rh['openai-beta']) {
+    rh['openai-beta'].split(',').map(s => s.trim()).forEach(f => featureFlags.push(f));
+  }
+  if (featureFlags.length) {
+    html += `<div class="section"><div class="section-header" onclick="toggleSection(this)">Features <span class="toggle">hide</span></div><div class="section-body" style="display: flex; flex-wrap: wrap; gap: 6px;">`;
+    for (const flag of featureFlags) {
+      html += `<span style="font-family: var(--mono); font-size: 10px; padding: 3px 8px; background: var(--accent-dim); color: var(--accent-light); border-radius: 4px;">${esc(flag)}</span>`;
     }
     html += `</div></div>`;
   }
 
-  // ── Token usage from message_delta SSE ──
-  const usageEvent = req.sseEvents?.find(e => e.type === 'message_delta');
-  const usage = usageEvent?.data?.usage;
+  // ── Token usage (unified across providers) ──
+  const usage = getUsage(req);
   if (usage) {
     html += `<div class="section"><div class="section-header">Token Usage</div><div class="section-body"><div class="kv-grid">`;
     for (const [k, v] of Object.entries(usage)) {
@@ -1186,28 +1399,17 @@ function renderOverview(req) {
     html += `</div></div></div>`;
   }
 
-  // ── Response metadata from SSE (message_start + message_delta) ──
-  const startEvent = req.sseEvents?.find(e => e.type === 'message_start');
-  const deltaEvent = req.sseEvents?.find(e => e.type === 'message_delta');
-  if (startEvent?.data?.message || deltaEvent?.data) {
+  // ── Response metadata from SSE (unified across providers) ──
+  const responseMeta = getResponseMeta(req);
+  if (responseMeta.length) {
     html += `<div class="section"><div class="section-header" onclick="toggleSection(this)">Response Metadata (from SSE) <span class="toggle">hide</span></div><div class="section-body"><div class="kv-grid">`;
-    const m = startEvent?.data?.message;
-    if (m) {
-      if (m.id) html += `<div class="kv-key">Message ID</div><div class="kv-val">${esc(m.id)}</div>`;
-      if (m.model) html += `<div class="kv-key">Model</div><div class="kv-val">${esc(m.model)}</div>`;
-      if (m.role) html += `<div class="kv-key">Role</div><div class="kv-val">${esc(m.role)}</div>`;
-      if (m.usage) {
-        for (const [k, v] of Object.entries(m.usage)) {
-          const display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
-          html += `<div class="kv-key">initial.${k}</div><div class="kv-val" style="color: var(--orange)">${esc(display)}</div>`;
-        }
-      }
-    }
-    const d = deltaEvent?.data;
-    if (d?.delta?.stop_reason) html += `<div class="kv-key">Stop Reason</div><div class="kv-val" style="color: var(--accent); font-weight: 700">${esc(d.delta.stop_reason)}</div>`;
-    if (d?.delta?.stop_sequence !== undefined) html += `<div class="kv-key">Stop Sequence</div><div class="kv-val">${d.delta.stop_sequence === null ? 'null' : esc(String(d.delta.stop_sequence))}</div>`;
-    if (d?.context_management) {
-      html += `<div class="kv-key">Context Mgmt (response)</div><div class="kv-val">${esc(JSON.stringify(d.context_management))}</div>`;
+    const highlightKeys = new Set(['Stop Reason', 'Finish Reason']);
+    const usageKeys = /^initial\./;
+    for (const [label, value] of responseMeta) {
+      const style = highlightKeys.has(label) ? ' style="color: var(--accent); font-weight: 700"'
+        : usageKeys.test(label) ? ' style="color: var(--orange)"'
+        : '';
+      html += `<div class="kv-key">${esc(label)}</div><div class="kv-val"${style}>${esc(String(value))}</div>`;
     }
     html += `</div></div></div>`;
   }
@@ -1221,11 +1423,39 @@ function renderOverview(req) {
 }
 
 // ─── Tab: Conversation ──────────────────────────────────────────────
+// Normalize a message so both old captured data and new normalized data render the same
+function normalizeMessage(msg) {
+  // Detect reasoning blocks stored as raw JSON strings (old capture format)
+  if (typeof msg.content === 'string') {
+    try {
+      const parsed = JSON.parse(msg.content);
+      if (parsed?.type === 'reasoning') {
+        const summary = parsed.summary?.map(s => s.text || '').join('\n').trim();
+        if (summary) {
+          return { role: 'assistant', content: [{ type: 'thinking', thinking: summary }] };
+        }
+        return null; // Skip reasoning blocks with no summary
+      }
+    } catch {}
+  }
+  // Normalize Responses API content types that weren't caught at extraction time
+  if (Array.isArray(msg.content)) {
+    const normalized = msg.content.map(block => {
+      if (block.type === 'input_text') return { type: 'text', text: block.text || '' };
+      if (block.type === 'output_text') return { type: 'text', text: block.text || '' };
+      return block;
+    });
+    return { ...msg, content: normalized };
+  }
+  return msg;
+}
+
 function renderConversation(req) {
   if (!req.messages?.length) return '<div class="empty-state">No messages in this request</div>';
 
   let html = '';
-  for (const msg of req.messages) {
+  for (const rawMsg of req.messages) {
+    const msg = normalizeMessage(rawMsg);
     const role = msg.role;
     html += `<div class="message ${role}">`;
     html += `<div class="message-header"><span>${role.toUpperCase()}</span></div>`;
@@ -1263,6 +1493,11 @@ function renderConversation(req) {
 }
 
 function buildAssistantFromSSE(req) {
+  if (req.provider === 'openai') return buildAssistantFromOpenAISSE(req);
+  return buildAssistantFromAnthropicSSE(req);
+}
+
+function buildAssistantFromAnthropicSSE(req) {
   if (!req.sseEvents?.length) return { blocks: [], meta: {} };
   const blocks = [];
   let currentBlock = null;
@@ -1311,6 +1546,167 @@ function buildAssistantFromSSE(req) {
   }
   // If still streaming, push partial block
   if (currentBlock) blocks.push(finalizeBlock(currentBlock, true));
+
+  return { blocks, meta };
+}
+
+function buildAssistantFromOpenAISSE(req) {
+  if (!req.sseEvents?.length) return { blocks: [], meta: {} };
+
+  // Check if this is Responses API or Chat Completions API
+  const hasResponsesEvents = req.sseEvents.some(e => e.type?.startsWith('response.'));
+  if (hasResponsesEvents) return buildAssistantFromResponsesSSE(req);
+  return buildAssistantFromChatCompletionsSSE(req);
+}
+
+function buildAssistantFromResponsesSSE(req) {
+  let meta = { stopReason: null, usage: null, messageId: null, model: null };
+  let textBuf = '';
+  const toolCalls = {}; // callId -> { id, name, argsBuf }
+  let blockIndex = 0;
+
+  for (const ev of req.sseEvents) {
+    if (ev.type === 'done') continue;
+    const d = ev.data;
+    if (!d || typeof d !== 'object') continue;
+
+    // response.created / response.completed carry top-level metadata
+    if (ev.type === 'response.created' || ev.type === 'response.completed' || ev.type === 'response.done') {
+      if (d.response?.id) meta.messageId = d.response.id;
+      if (d.response?.model) meta.model = d.response.model;
+      if (d.response?.usage) meta.usage = d.response.usage;
+      if (d.response?.status === 'completed') meta.stopReason = 'completed';
+      // Also check top-level
+      if (d.id) meta.messageId = d.id;
+      if (d.model) meta.model = d.model;
+      if (d.usage) meta.usage = d.usage;
+      if (d.status === 'completed') meta.stopReason = 'completed';
+    }
+
+    // Text deltas
+    if (ev.type === 'response.output_text.delta') {
+      textBuf += d.delta || '';
+    }
+
+    // Function call argument deltas
+    if (ev.type === 'response.function_call_arguments.delta') {
+      const callId = d.call_id || d.item_id || 'default';
+      if (!toolCalls[callId]) {
+        toolCalls[callId] = { id: callId, name: d.name || '', argsBuf: '' };
+      }
+      toolCalls[callId].argsBuf += d.delta || '';
+    }
+    if (ev.type === 'response.function_call_arguments.done') {
+      const callId = d.call_id || d.item_id || 'default';
+      if (!toolCalls[callId]) {
+        toolCalls[callId] = { id: callId, name: d.name || '', argsBuf: d.arguments || '' };
+      } else {
+        if (d.name) toolCalls[callId].name = d.name;
+      }
+    }
+
+    // output_item.added can carry function call names
+    if (ev.type === 'response.output_item.added') {
+      const item = d.item;
+      if (item?.type === 'function_call') {
+        const callId = item.call_id || item.id || 'default';
+        if (!toolCalls[callId]) {
+          toolCalls[callId] = { id: callId, name: item.name || '', argsBuf: '' };
+        }
+      }
+    }
+  }
+
+  const blocks = [];
+  if (textBuf) {
+    blocks.push({
+      type: 'text',
+      index: blockIndex++,
+      streaming: req.streaming,
+      text: textBuf,
+    });
+  }
+
+  for (const [, tc] of Object.entries(toolCalls)) {
+    let parsedInput = null;
+    try { parsedInput = JSON.parse(tc.argsBuf); } catch {}
+    blocks.push({
+      type: 'tool_use',
+      index: blockIndex++,
+      streaming: req.streaming && !meta.stopReason,
+      toolId: tc.id,
+      toolName: tc.name,
+      caller: null,
+      input: parsedInput,
+      rawJson: tc.argsBuf,
+    });
+  }
+
+  return { blocks, meta };
+}
+
+function buildAssistantFromChatCompletionsSSE(req) {
+  let meta = { stopReason: null, usage: null, messageId: null, model: null };
+  let textBuf = '';
+  const toolCalls = {}; // index -> { id, name, argsBuf }
+  let blockIndex = 0;
+
+  for (const ev of req.sseEvents) {
+    if (ev.type === 'done') continue;
+    const chunk = ev.data;
+    if (!chunk || typeof chunk !== 'object') continue;
+
+    if (chunk.id && !meta.messageId) meta.messageId = chunk.id;
+    if (chunk.model && !meta.model) meta.model = chunk.model;
+    if (chunk.usage) meta.usage = chunk.usage;
+
+    const choice = chunk.choices?.[0];
+    if (!choice) continue;
+
+    if (choice.finish_reason) meta.stopReason = choice.finish_reason;
+
+    const delta = choice.delta;
+    if (!delta) continue;
+
+    if (delta.content) textBuf += delta.content;
+
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const idx = tc.index ?? 0;
+        if (!toolCalls[idx]) {
+          toolCalls[idx] = { id: tc.id || null, name: tc.function?.name || '', argsBuf: '' };
+        }
+        if (tc.id) toolCalls[idx].id = tc.id;
+        if (tc.function?.name) toolCalls[idx].name = tc.function.name;
+        if (tc.function?.arguments) toolCalls[idx].argsBuf += tc.function.arguments;
+      }
+    }
+  }
+
+  const blocks = [];
+  if (textBuf) {
+    blocks.push({
+      type: 'text',
+      index: blockIndex++,
+      streaming: req.streaming,
+      text: textBuf,
+    });
+  }
+
+  for (const [, tc] of Object.entries(toolCalls).sort((a, b) => a[0] - b[0])) {
+    let parsedInput = null;
+    try { parsedInput = JSON.parse(tc.argsBuf); } catch {}
+    blocks.push({
+      type: 'tool_use',
+      index: blockIndex++,
+      streaming: req.streaming && !meta.stopReason,
+      toolId: tc.id,
+      toolName: tc.name,
+      caller: null,
+      input: parsedInput,
+      rawJson: tc.argsBuf,
+    });
+  }
 
   return { blocks, meta };
 }
@@ -1391,22 +1787,21 @@ function renderResponse(req) {
   if (req.streaming) html += `<div class="thinking-indicator"><div class="thinking-dots"><span></span><span></span><span></span></div> streaming</div>`;
   html += '</div>';
 
-  // ── Usage chips ──
+  // ── Usage chips (unified label map for all providers) ──
   if (meta.usage) {
     html += '<div class="resp-usage-bar" style="margin-bottom: 14px;">';
-    const labels = {
-      input_tokens: 'Input',
-      output_tokens: 'Output',
-      cache_creation_input_tokens: 'Cache Write',
-      cache_read_input_tokens: 'Cache Read',
+    const usageLabels = {
+      input_tokens: 'Input', output_tokens: 'Output',
+      cache_creation_input_tokens: 'Cache Write', cache_read_input_tokens: 'Cache Read',
+      prompt_tokens: 'Prompt', completion_tokens: 'Completion', total_tokens: 'Total',
     };
-    for (const [key, label] of Object.entries(labels)) {
-      if (meta.usage[key] !== undefined) {
-        html += `<div class="usage-chip">
-          <div class="usage-chip-label">${label}</div>
-          <div class="usage-chip-value">${meta.usage[key].toLocaleString()}</div>
-        </div>`;
-      }
+    for (const [key, val] of Object.entries(meta.usage)) {
+      if (typeof val !== 'number') continue;
+      const label = usageLabels[key] || key;
+      html += `<div class="usage-chip">
+        <div class="usage-chip-label">${esc(label)}</div>
+        <div class="usage-chip-value">${val.toLocaleString()}</div>
+      </div>`;
     }
     html += '</div>';
   }
@@ -1497,7 +1892,11 @@ function renderResponse(req) {
 function renderSystem(req) {
   if (!req.system) return '<div class="empty-state">No system prompt</div>';
 
-  const parts = Array.isArray(req.system) ? req.system : [{ type: 'text', text: req.system }];
+  // OpenAI system prompt is extracted as a plain string from messages
+  const isPlainString = typeof req.system === 'string' && req.provider === 'openai';
+  const parts = isPlainString
+    ? [{ type: 'text', text: req.system }]
+    : (Array.isArray(req.system) ? req.system : [{ type: 'text', text: req.system }]);
   let html = '';
 
   for (let i = 0; i < parts.length; i++) {

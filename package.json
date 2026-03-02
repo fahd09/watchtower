@@ -1,40 +1,46 @@
 {
-  "name": "claude-intercept",
+  "name": "watchtower-ai",
   "version": "1.0.0",
-  "description": "Intercept, inspect, and debug all API traffic between Claude Code and the Anthropic API — with a real-time web dashboard.",
+  "description": "Watchtower — monitor, inspect, and debug all API traffic between AI coding agents (Claude Code, Codex CLI, OpenAI-compatible clients) and their APIs, with a real-time web dashboard.",
   "type": "module",
   "main": "intercept.mjs",
   "bin": {
-    "claude-intercept": "intercept.mjs"
+    "watchtower-ai": "intercept.mjs"
   },
   "scripts": {
     "start": "node intercept.mjs"
   },
   "keywords": [
+    "watchtower",
     "claude",
     "anthropic",
+    "openai",
+    "codex",
     "proxy",
-    "interceptor",
+    "monitor",
     "debugger",
     "api",
     "dashboard",
     "claude-code",
-    "network",
+    "codex-cli",
+    "llm",
+    "ai-agent",
     "inspector"
   ],
-  "author": "",
+  "author": "Fahd Alhazmi (https://www.npmjs.com/~alhazmiai)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fahd09/claude-intercept.git"
+    "url": "git+https://github.com/fahd09/watchtower.git"
   },
-  "homepage": "https://github.com/fahd09/claude-intercept",
+  "homepage": "https://github.com/fahd09/watchtower",
   "engines": {
     "node": ">=18.0.0"
   },
   "files": [
     "intercept.mjs",
     "dashboard.html",
+    "providers/",
     "LICENSE",
     "README.md"
   ],

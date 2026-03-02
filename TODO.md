@@ -4,7 +4,7 @@ Planned features, roughly ordered by priority. PRs welcome — open an issue fir
 
 ## P0 — Ship Blockers
 
-1. **Zero-dependency proxy** — Drop the `ws` npm dependency. Use Node's built-in `WebSocketServer` (node 22+) so the tool works with just `npx claude-intercept` or a single file. No `npm install` step.
+1. **Zero-dependency proxy** — Drop the `ws` npm dependency. Use Node's built-in `WebSocketServer` (node 22+) so the tool works with a single file. No `npm install` step.
 
 2. **Transparent gzip pass-through** — Currently we strip `accept-encoding` so we can log plaintext. This works but sends uncompressed data to Claude Code (wastes bandwidth, possible behavioral difference). Decompress for logging, pipe raw bytes to the client.
 
@@ -54,7 +54,7 @@ Planned features, roughly ordered by priority. PRs welcome — open an issue fir
 
 19. **Auto-scroll toggle** for SSE stream tab.
 20. **Error notifications** — Visual alert on 4xx/5xx or rate limit utilization > 80%.
-21. **Light theme** toggle.
+21. ~~**Light theme** toggle.~~ ✅ Done
 22. **Timeline waterfall** — Chrome DevTools-style timing chart across all requests.
 23. **`npx` / `brew` distribution** — Zero-install CLI.
 
