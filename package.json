@@ -1,6 +1,6 @@
 {
   "name": "watchtower-ai",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Watchtower — monitor, inspect, and debug all API traffic between AI coding agents (Claude Code, Codex CLI, OpenAI-compatible clients) and their APIs, with a real-time web dashboard.",
   "type": "module",
   "main": "intercept.mjs",
