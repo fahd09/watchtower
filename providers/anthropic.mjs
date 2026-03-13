@@ -99,6 +99,59 @@ export default {
     return { events, remainingBuffer };
   },
 
+  // Assemble SSE events into a batch-style Message object
+  assembleResponse(sseEvents) {
+    if (!sseEvents?.length) return null;
+    let message = null;
+
+    for (const ev of sseEvents) {
+      const d = ev.data;
+      if (typeof d !== "object" || !d) continue;
+
+      if (ev.type === "message_start" && d.message) {
+        message = { ...d.message, content: [] };
+      } else if (ev.type === "content_block_start" && message) {
+        const cb = d.content_block || {};
+        if (cb.type === "text") {
+          message.content.push({ type: "text", text: "" });
+        } else if (cb.type === "thinking") {
+          message.content.push({ type: "thinking", thinking: "", signature: cb.signature || "" });
+        } else if (cb.type === "tool_use") {
+          message.content.push({ type: "tool_use", id: cb.id, name: cb.name, input: {}, _jsonBuf: "" });
+        } else {
+          message.content.push({ ...cb });
+        }
+      } else if (ev.type === "content_block_delta" && message) {
+        const idx = d.index;
+        const block = message.content[idx];
+        const delta = d.delta;
+        if (!block || !delta) continue;
+        if (delta.type === "text_delta") block.text += delta.text;
+        else if (delta.type === "thinking_delta") block.thinking += delta.thinking;
+        else if (delta.type === "input_json_delta") block._jsonBuf = (block._jsonBuf || "") + delta.partial_json;
+        else if (delta.type === "signature_delta") block.signature = (block.signature || "") + delta.signature;
+      } else if (ev.type === "content_block_stop" && message) {
+        const block = message.content[d.index];
+        if (block?.type === "tool_use" && block._jsonBuf) {
+          try { block.input = JSON.parse(block._jsonBuf); } catch {}
+          delete block._jsonBuf;
+        }
+      } else if (ev.type === "message_delta" && message) {
+        if (d.delta) Object.assign(message, d.delta);
+        if (d.usage) message.usage = { ...(message.usage || {}), ...d.usage };
+      }
+    }
+
+    // Clean up any remaining _jsonBuf fields
+    if (message) {
+      for (const block of message.content) {
+        delete block._jsonBuf;
+      }
+    }
+
+    return message;
+  },
+
   processSSEEvent(event, currentParent, reqId, log) {
     let logLine = null;
     let agentSpawn = null;
