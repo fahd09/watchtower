@@ -223,6 +223,50 @@
   .turn-stats { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
   .turn-members { border-bottom: 2px solid var(--border); }
 
+  /* ── Replay modal ──────────────────────────────────── */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0, 0, 0, 0.6);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    width: min(760px, 92vw); max-height: 86vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 700; font-size: 14px;
+  }
+  .modal-close { background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; }
+  .modal-close:hover { color: var(--text); }
+  .modal-hint { padding: 10px 16px 0; font-size: 12px; color: var(--text-dim); }
+  .modal-textarea {
+    margin: 12px 16px; padding: 12px; flex: 1; min-height: 300px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    resize: vertical; outline: none; white-space: pre; overflow: auto;
+  }
+  .modal-textarea:focus { border-color: var(--accent); }
+  .modal-error { padding: 0 16px; font-size: 12px; color: var(--red); min-height: 16px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .btn-primary, .btn-secondary { padding: 7px 16px; font-size: 13px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+  .btn-secondary { background: transparent; color: var(--text-dim); }
+  .btn-secondary:hover { color: var(--text); }
+  .replay-btn {
+    padding: 7px 14px; font-size: 13px; font-weight: 600;
+    background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer;
+  }
+  .replay-btn:hover { opacity: 0.9; }
+  .replay-badge { color: var(--accent); font-size: 10px; font-weight: 700; margin-left: 4px; }
+
   /* ── Diffs ─────────────────────────────────────────── */
   .diff-summary { padding: 14px; font-size: 12px; color: var(--text-dim); }
   .diff-header {
@@ -1125,6 +1169,23 @@
   </div>
 </div>
 
+<!-- Replay editor modal -->
+<div class="modal-overlay" id="replayModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="replayTitle">Replay request</span>
+      <button class="modal-close" onclick="closeReplay()">✕</button>
+    </div>
+    <div class="modal-hint">Edit the request body below and send it upstream with the original request's auth. The result is captured as a new request.</div>
+    <textarea id="replayBody" class="modal-textarea" spellcheck="false"></textarea>
+    <div class="modal-error" id="replayError"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeReplay()">Cancel</button>
+      <button class="btn-primary" id="replaySend" onclick="sendReplay()">Send replay</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── Theme ──────────────────────────────────────────────────────────
 function applyTheme(theme) {
@@ -1153,6 +1214,7 @@ const state = {
   filter: { q: '', hideUtility: false, errorsOnly: false },
   groupTurns: false,
   collapsedTurns: new Set(),
+  replayId: null,
 };
 
 // ─── Sidebar filtering ──────────────────────────────────────────────
@@ -1308,7 +1370,7 @@ function requestItemHtml(r) {
     <div class="request-item ${indentClass} ${activeClass}" onclick="selectRequest(${r.id})">
       ${r.streaming ? '<div class="req-streaming"></div>' : ''}
       <div class="req-top">
-        <span class="req-id">#${r.id}${providerTag}${roleTag}</span>
+        <span class="req-id">#${r.id}${providerTag}${roleTag}${r.replayOf ? '<span class="replay-badge">↻#' + r.replayOf + '</span>' : ''}</span>
         <span class="req-badge badge-${r.type}">${r.type.replace('_', ' ')}</span>
       </div>
       <div class="req-model">${r.model || 'unknown'}</div>
@@ -1426,6 +1488,43 @@ function selectRequest(id) {
     state.requests.set(id, { ...existing, ...detail });
     renderDetail();
   }).catch(() => renderDetail());
+}
+
+// ─── Replay ─────────────────────────────────────────────────────────
+function openReplay(id) {
+  const show = (r) => {
+    state.replayId = id;
+    document.getElementById('replayTitle').textContent = `Replay request #${id}`;
+    const body = (r && r.requestBody !== undefined) ? r.requestBody : {};
+    document.getElementById('replayBody').value = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+    document.getElementById('replayError').textContent = '';
+    document.getElementById('replayModal').classList.add('open');
+  };
+  const req = state.requests.get(id);
+  if (req && req.requestBody !== undefined) show(req);
+  else fetch(`/api/request/${id}`).then(x => x.json()).then(d => {
+    state.requests.set(id, { ...state.requests.get(id), ...d });
+    show(state.requests.get(id));
+  }).catch(() => show(req));
+}
+function closeReplay() { document.getElementById('replayModal').classList.remove('open'); }
+function sendReplay() {
+  const id = state.replayId;
+  const bodyText = document.getElementById('replayBody').value;
+  const errEl = document.getElementById('replayError');
+  try { JSON.parse(bodyText); errEl.textContent = ''; }
+  catch (e) { errEl.textContent = 'Note: body is not valid JSON — sending exactly as typed.'; }
+  const btn = document.getElementById('replaySend');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  fetch('/api/replay', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, body: bodyText }) })
+    .then(r => r.json()).then(res => {
+      btn.disabled = false; btn.textContent = 'Send replay';
+      if (res.error) { errEl.textContent = res.error; return; }
+      closeReplay();
+      let tries = 0;
+      const trySelect = () => { if (state.requests.has(res.id) || tries++ > 40) selectRequest(res.id); else setTimeout(trySelect, 150); };
+      trySelect();
+    }).catch(e => { btn.disabled = false; btn.textContent = 'Send replay'; errEl.textContent = 'Request failed: ' + e.message; });
 }
 
 // ─── Render detail panel ────────────────────────────────────────────
@@ -1848,7 +1947,15 @@ function renderOverview(req) {
   if (req.contextManagement) info.push(['Context Mgmt', JSON.stringify(req.contextManagement)]);
   if (req.metadata?.user_id) info.push(['User ID', req.metadata.user_id]);
 
-  let html = `<div class="section"><div class="section-header">Request Info</div><div class="section-body"><div class="kv-grid">`;
+  let html = '';
+
+  // ── Replay control ──
+  html += `<div class="section"><div class="section-body" style="display:flex; align-items:center; gap:12px;">
+    <button class="replay-btn" onclick="openReplay(${req.id})">↻ Replay / edit request</button>
+    ${req.replayOf ? `<span style="font-size:12px; color:var(--text-dim);">This is a replay of <a href="#" onclick="selectRequest(${req.replayOf});return false;" style="color:var(--accent)">#${req.replayOf}</a></span>` : ''}
+  </div></div>`;
+
+  html += `<div class="section"><div class="section-header">Request Info</div><div class="section-body"><div class="kv-grid">`;
   for (const [k, v] of info) {
     html += `<div class="kv-key">${k}</div><div class="kv-val">${esc(String(v))}</div>`;
   }
@@ -2757,6 +2864,14 @@ function updateStats() {
 }
 
 setInterval(updateStats, 1000);
+
+// Close the replay modal on overlay click or Escape.
+document.getElementById('replayModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeReplay();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeReplay();
+});
 
 // ─── Boot ───────────────────────────────────────────────────────────
 connectWs();

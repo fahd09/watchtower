@@ -50,6 +50,10 @@ const store = {
   requests: [], // All intercepted request/response pairs
 };
 
+// Unmasked request headers, kept in memory only (never written to disk or the
+// API) so replays can reuse the original auth. Keyed by request id.
+const realHeadersById = new Map();
+
 let requestCounter = 0;
 
 // ─── Agent hierarchy tracking ────────────────────────────────────────
@@ -113,71 +117,26 @@ function log(prefix, msg) {
   console.log(`${C.dim}${ts()}${C.reset} ${c}${C.bold}[${prefix}]${C.reset} ${msg}`);
 }
 
-// ─── Proxy Server ───────────────────────────────────────────────────
-const proxyServer = http.createServer(async (req, res) => {
-  const reqId = ++requestCounter;
-  const startTime = Date.now();
+// Build an intercepted-request record, register it, log it, and broadcast
+// request_start. Used by both live proxying and replay. Real (unmasked)
+// headers are stashed in realHeadersById so replays can reuse the auth.
+function buildRecord({ reqId, provider, method, url, realHeaders, parsed, decodedBody, mutation, startTime, updateHierarchy, replayOf }) {
+  const requestType = provider.classifyRequest(method, url, parsed);
+  const { agentRole, parentId, newParent } = provider.detectAgentRole(parsed, currentParent, reqId);
+  if (updateHierarchy) currentParent = newParent;
+  const fields = provider.extractRequestFields(parsed);
 
-  // Detect provider before reading body (based on headers/URL)
-  const provider = detectProvider(req);
-
-  // Collect request body (decompress if needed for parsing)
-  const bodyChunks = [];
-  for await (const chunk of req) bodyChunks.push(chunk);
-  const rawBodyBuffer = Buffer.concat(bodyChunks);
-  const reqEncoding = req.headers["content-encoding"];
-  let decodedBody;
-  try {
-    const decompressed = reqEncoding ? await decompressBuffer(rawBodyBuffer, reqEncoding) : rawBodyBuffer;
-    decodedBody = decompressed.toString("utf-8");
-  } catch {
-    decodedBody = rawBodyBuffer.toString("utf-8");
-  }
-  const requestBodyParsed = tryParseJson(decodedBody);
-
-  // Optional request rewriting (opt-in). If a provider mutates the body we
-  // forward the re-serialized JSON instead of the original bytes.
-  let rawRequestBody = rawBodyBuffer; // Original bytes for forwarding
-  let mutation = null;
-  if (REVEAL_THINKING && provider.revealThinking && requestBodyParsed) {
-    const rewritten = provider.revealThinking(requestBodyParsed);
-    if (rewritten) {
-      rawRequestBody = Buffer.from(JSON.stringify(rewritten), "utf-8");
-      mutation = "thinking.display: omitted → summarized";
-    }
-  }
-
-  // Resolve target — provider may pick a different upstream based on auth type
-  const resolved = provider.resolveTarget
-    ? provider.resolveTarget(req.headers)
-    : { target: provider.target, pathPrefix: provider.pathPrefix };
-  let targetPath = req.url;
-  if (resolved.pathPrefix && !targetPath.startsWith(resolved.pathPrefix)) {
-    targetPath = resolved.pathPrefix + targetPath;
-  }
-  const targetUrl = new URL(targetPath, resolved.target);
-  const requestType = provider.classifyRequest(req.method, req.url, requestBodyParsed);
-
-  // Detect agent role
-  const { agentRole, parentId, newParent } = provider.detectAgentRole(requestBodyParsed, currentParent, reqId);
-  currentParent = newParent;
-
-  // Extract provider-specific request fields
-  const fields = provider.extractRequestFields(requestBodyParsed);
-
-  // Build the record
   const record = {
     id: reqId,
     startTime,
     provider: provider.name,
-    method: req.method,
-    url: req.url,
+    method,
+    url,
     type: requestType,
     agentRole,
-    parentId,
-    requestHeaders: provider.maskSecrets(req.headers),
-    requestBody: requestBodyParsed || decodedBody,
-    // Extracted fields
+    parentId: updateHierarchy ? parentId : null,
+    requestHeaders: provider.maskSecrets(realHeaders),
+    requestBody: parsed || decodedBody,
     model: fields.model,
     system: fields.system,
     messages: fields.messages,
@@ -187,8 +146,8 @@ const proxyServer = http.createServer(async (req, res) => {
     maxTokens: fields.maxTokens,
     metadata: fields.metadata,
     contextManagement: fields.contextManagement,
-    mutation, // non-null if we rewrote the outgoing request
-    // Response fields - filled later
+    mutation: mutation || null,
+    replayOf: replayOf || null,
     status: null,
     responseHeaders: null,
     responseBody: null,
@@ -199,18 +158,21 @@ const proxyServer = http.createServer(async (req, res) => {
   };
 
   store.requests.push(record);
-  const parentTag = parentId ? ` parent=#${parentId}` : "";
+  realHeadersById.set(reqId, realHeaders);
+
+  const parentTag = record.parentId ? ` parent=#${record.parentId}` : "";
   const provTag = provider.name === "openai" ? " [openai]" : "";
-  log(">>>", `#${reqId} ${req.method} ${req.url} [${requestType}] [${agentRole}${parentTag}]${provTag} model=${record.model || "n/a"}`);
+  const replayTag = replayOf ? ` [replay of #${replayOf}]` : "";
+  log(">>>", `#${reqId} ${method} ${url} [${requestType}] [${agentRole}${parentTag}]${provTag}${replayTag} model=${record.model || "n/a"}`);
   if (mutation) log("INFO", `#${reqId} request rewritten (${mutation})`);
   broadcast("request_start", {
     id: reqId,
     provider: provider.name,
-    method: req.method,
-    url: req.url,
+    method,
+    url,
     type: requestType,
     agentRole,
-    parentId,
+    parentId: record.parentId,
     model: record.model,
     system: record.system,
     messages: record.messages,
@@ -219,28 +181,25 @@ const proxyServer = http.createServer(async (req, res) => {
     maxTokens: record.maxTokens,
     metadata: record.metadata,
     requestHeaders: record.requestHeaders,
+    replayOf: replayOf || null,
   });
+  return record;
+}
 
-  // Forward to target. We keep the client's accept-encoding untouched so the
-  // upstream compresses exactly as it would without the proxy — we forward
-  // those original bytes to the client verbatim (transparent pass-through) and
-  // only decompress a private copy for our own logging/parsing.
-  const proxyHeaders = { ...req.headers };
-  delete proxyHeaders["host"];
-  proxyHeaders["host"] = targetUrl.host;
-  // If we rewrote the body, we re-serialized it as plain JSON — drop any
-  // request content-encoding and fix the length to match the new bytes.
-  if (mutation) {
-    delete proxyHeaders["content-encoding"];
-    proxyHeaders["content-length"] = String(rawRequestBody.length);
-  }
+// Send the request upstream and capture the response into `record`. When
+// clientRes is set (live proxying) the response is streamed back to the caller
+// with transparent gzip pass-through; when null (replay) it's captured only.
+function forwardAndCapture(record, opts) {
+  const { provider, targetUrl, method, headers, bodyBuffer, clientRes, startTime, acceptHeader, updateHierarchy } = opts;
+  const reqId = record.id;
+  const provTag = provider.name === "openai" ? " [openai]" : "";
 
-  const proxyReq = https.request(targetUrl, { method: req.method, headers: proxyHeaders }, (proxyRes) => {
-    // Detect SSE: check content-type first, then fall back to request's accept header
-    // (ChatGPT backend omits content-type but streams SSE when accept: text/event-stream)
+  const proxyReq = https.request(targetUrl, { method, headers }, (proxyRes) => {
+    // Detect SSE: content-type first, else fall back to the request's accept
+    // header (ChatGPT backend omits content-type but streams when asked).
     const isSSE = (proxyRes.headers["content-type"] || "").includes("text/event-stream")
       || (!proxyRes.headers["content-type"] && proxyRes.statusCode === 200
-          && (req.headers["accept"] || "").includes("text/event-stream"));
+          && (acceptHeader || "").includes("text/event-stream"));
     const encoding = proxyRes.headers["content-encoding"];
 
     record.status = proxyRes.statusCode;
@@ -249,19 +208,15 @@ const proxyServer = http.createServer(async (req, res) => {
 
     log("<<<", `#${reqId} ${proxyRes.statusCode} [${isSSE ? "SSE" : "JSON"}]${provTag}`);
 
-    // Forward the upstream's headers to the client as-is, preserving
-    // content-encoding: the body we pass through is byte-identical to what the
-    // upstream sent, so the client decompresses it exactly as it normally would.
-    // We drop transfer-encoding because we re-frame the response ourselves.
-    const clientHeaders = { ...proxyRes.headers };
-    delete clientHeaders["transfer-encoding"];
-    res.writeHead(proxyRes.statusCode, clientHeaders);
+    if (clientRes) {
+      // Forward upstream headers as-is, preserving content-encoding (the body
+      // we pass through is byte-identical). Drop transfer-encoding; we re-frame.
+      const clientHeaders = { ...proxyRes.headers };
+      delete clientHeaders["transfer-encoding"];
+      clientRes.writeHead(proxyRes.statusCode, clientHeaders);
+    }
 
     if (isSSE) {
-      // ── SSE stream handling ──
-      // Two consumers of the upstream stream:
-      //   1. proxyRes  → client, raw bytes untouched (preserves compression)
-      //   2. parseSource → a decompressed copy we parse for events/logging
       let sseBuffer = "";
       let rawResponseChunks = [];
       let decompressor = null;
@@ -273,9 +228,11 @@ const proxyServer = http.createServer(async (req, res) => {
 
       const parseSource = decompressor ? proxyRes.pipe(decompressor) : proxyRes;
 
-      // (1) Forward original bytes to the client, verbatim.
-      proxyRes.on("data", (chunk) => res.write(chunk));
-      proxyRes.on("end", () => res.end());
+      // (1) Forward original bytes to the client, verbatim (live only).
+      if (clientRes) {
+        proxyRes.on("data", (chunk) => clientRes.write(chunk));
+        proxyRes.on("end", () => clientRes.end());
+      }
 
       // (2) Parse a decompressed copy for our own SSE event capture.
       parseSource.on("data", (chunk) => {
@@ -292,14 +249,13 @@ const proxyServer = http.createServer(async (req, res) => {
 
           broadcast("sse_event", { requestId: reqId, ...sseRecord });
 
-          // Process for logging and agent hierarchy
           const { logLine, agentSpawn, newParent: updatedParent } = provider.processSSEEvent(
             { type: event.type, parsed },
             currentParent,
             reqId,
             log,
           );
-          currentParent = updatedParent;
+          if (updateHierarchy) currentParent = updatedParent;
 
           if (agentSpawn) {
             broadcast("agent_spawn", agentSpawn);
@@ -324,21 +280,17 @@ const proxyServer = http.createServer(async (req, res) => {
         record.error = err.message;
         log("ERR", `#${reqId} Stream parse error: ${err.message}`);
       });
-      // If the raw upstream stream errors, tear down the client response.
       proxyRes.on("error", (err) => {
         record.error = err.message;
         log("ERR", `#${reqId} Stream error: ${err.message}`);
-        res.end();
+        if (clientRes) clientRes.end();
       });
     } else {
-      // ── Standard JSON response ──
       const chunks = [];
       proxyRes.on("data", (c) => chunks.push(c));
       proxyRes.on("end", async () => {
         const raw = Buffer.concat(chunks);
-        // Forward the original (possibly compressed) bytes to the client, then
-        // decompress a private copy for logging.
-        res.end(raw);
+        if (clientRes) clientRes.end(raw); // forward original bytes, encoding intact
         try {
           const decompressed = await decompressBuffer(raw, encoding);
           const text = decompressed.toString("utf-8");
@@ -363,12 +315,114 @@ const proxyServer = http.createServer(async (req, res) => {
     record.duration = Date.now() - startTime;
     log("ERR", `#${reqId} Proxy error: ${err.message}`);
     broadcast("request_end", { id: reqId, error: err.message });
-    res.writeHead(502);
-    res.end(JSON.stringify({ error: "Proxy error", message: err.message }));
+    if (clientRes) {
+      clientRes.writeHead(502);
+      clientRes.end(JSON.stringify({ error: "Proxy error", message: err.message }));
+    }
   });
 
-  if (rawRequestBody.length > 0) proxyReq.write(rawRequestBody);
+  if (bodyBuffer && bodyBuffer.length > 0) proxyReq.write(bodyBuffer);
   proxyReq.end();
+}
+
+// Re-send a captured request (optionally with an edited body) and capture the
+// result as a new request. Reuses the original request's real headers/auth.
+function replayRequest({ originalId, editedBody }) {
+  const orig = store.requests.find((r) => r.id === originalId);
+  const realHeaders = realHeadersById.get(originalId);
+  if (!orig || !realHeaders) return { error: "Original request not found or its headers are no longer in memory." };
+
+  const provider = providers[orig.provider] || providers.anthropic;
+  const bodyStr = editedBody != null
+    ? (typeof editedBody === "string" ? editedBody : JSON.stringify(editedBody))
+    : JSON.stringify(orig.requestBody);
+  const parsed = tryParseJson(bodyStr);
+  const bodyBuffer = Buffer.from(bodyStr, "utf-8");
+
+  const headers = { ...realHeaders };
+  const resolved = provider.resolveTarget ? provider.resolveTarget(headers) : { target: provider.target, pathPrefix: provider.pathPrefix };
+  let targetPath = orig.url;
+  if (resolved.pathPrefix && !targetPath.startsWith(resolved.pathPrefix)) targetPath = resolved.pathPrefix + targetPath;
+  const targetUrl = new URL(targetPath, resolved.target);
+  delete headers["host"];
+  headers["host"] = targetUrl.host;
+  delete headers["content-encoding"]; // we send plain re-serialized JSON
+  headers["content-length"] = String(bodyBuffer.length);
+
+  const reqId = ++requestCounter;
+  const startTime = Date.now();
+  const record = buildRecord({
+    reqId, provider, method: orig.method, url: orig.url, realHeaders,
+    parsed, decodedBody: bodyStr, startTime, updateHierarchy: false, replayOf: originalId,
+  });
+
+  forwardAndCapture(record, {
+    provider, targetUrl, method: orig.method, headers, bodyBuffer,
+    clientRes: null, startTime, acceptHeader: headers["accept"] || "", updateHierarchy: false,
+  });
+  return { id: reqId };
+}
+
+// ─── Proxy Server ───────────────────────────────────────────────────
+const proxyServer = http.createServer(async (req, res) => {
+  const reqId = ++requestCounter;
+  const startTime = Date.now();
+  const provider = detectProvider(req);
+
+  // Collect request body (decompress if needed for parsing)
+  const bodyChunks = [];
+  for await (const chunk of req) bodyChunks.push(chunk);
+  const rawBodyBuffer = Buffer.concat(bodyChunks);
+  const reqEncoding = req.headers["content-encoding"];
+  let decodedBody;
+  try {
+    const decompressed = reqEncoding ? await decompressBuffer(rawBodyBuffer, reqEncoding) : rawBodyBuffer;
+    decodedBody = decompressed.toString("utf-8");
+  } catch {
+    decodedBody = rawBodyBuffer.toString("utf-8");
+  }
+  const requestBodyParsed = tryParseJson(decodedBody);
+
+  // Optional request rewriting (opt-in). If a provider mutates the body we
+  // forward the re-serialized JSON instead of the original bytes.
+  let rawRequestBody = rawBodyBuffer;
+  let mutation = null;
+  if (REVEAL_THINKING && provider.revealThinking && requestBodyParsed) {
+    const rewritten = provider.revealThinking(requestBodyParsed);
+    if (rewritten) {
+      rawRequestBody = Buffer.from(JSON.stringify(rewritten), "utf-8");
+      mutation = "thinking.display: omitted → summarized";
+    }
+  }
+
+  // Resolve target — provider may pick a different upstream based on auth type
+  const resolved = provider.resolveTarget
+    ? provider.resolveTarget(req.headers)
+    : { target: provider.target, pathPrefix: provider.pathPrefix };
+  let targetPath = req.url;
+  if (resolved.pathPrefix && !targetPath.startsWith(resolved.pathPrefix)) {
+    targetPath = resolved.pathPrefix + targetPath;
+  }
+  const targetUrl = new URL(targetPath, resolved.target);
+
+  const record = buildRecord({
+    reqId, provider, method: req.method, url: req.url, realHeaders: req.headers,
+    parsed: requestBodyParsed, decodedBody, mutation, startTime, updateHierarchy: true,
+  });
+
+  // Build forward headers (transparent pass-through: keep accept-encoding).
+  const proxyHeaders = { ...req.headers };
+  delete proxyHeaders["host"];
+  proxyHeaders["host"] = targetUrl.host;
+  if (mutation) {
+    delete proxyHeaders["content-encoding"];
+    proxyHeaders["content-length"] = String(rawRequestBody.length);
+  }
+
+  forwardAndCapture(record, {
+    provider, targetUrl, method: req.method, headers: proxyHeaders, bodyBuffer: rawRequestBody,
+    clientRes: res, startTime, acceptHeader: req.headers["accept"] || "", updateHierarchy: true,
+  });
 });
 
 // Best-effort token usage for a record, merged across providers/streaming.
@@ -399,10 +453,18 @@ function saveLog(record) {
 // ─── Dashboard Server ───────────────────────────────────────────────
 const dashboardHtml = fs.readFileSync(path.join(import.meta.dirname, "dashboard.html"), "utf-8");
 
-const dashboardServer = http.createServer((req, res) => {
+const dashboardServer = http.createServer(async (req, res) => {
   if (req.url === "/" || req.url === "/index.html") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(dashboardHtml);
+  } else if (req.method === "POST" && req.url === "/api/replay") {
+    // Re-send a captured request, optionally with an edited body.
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const payload = tryParseJson(Buffer.concat(chunks).toString("utf-8")) || {};
+    const result = replayRequest({ originalId: payload.id, editedBody: payload.body });
+    res.writeHead(result.error ? 400 : 200, { "content-type": "application/json" });
+    res.end(JSON.stringify(result));
   } else if (req.url === "/api/requests") {
     res.writeHead(200, { "content-type": "application/json" });
     // Send summary list
@@ -423,6 +485,7 @@ const dashboardServer = http.createServer((req, res) => {
       toolCount: r.tools?.length || 0,
       error: r.error,
       mutation: r.mutation || null,
+      replayOf: r.replayOf || null,
       usage: extractUsage(r), // token usage for cost totals without loading full detail
     }));
     res.end(JSON.stringify(summary));
