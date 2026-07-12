@@ -19,3 +19,6 @@ Thumbs.db
 # Misc
 claude-call-response.txt
 TODO.md
+
+# Captured internal agent prompts (local inspection only)
+captured-prompts.md
