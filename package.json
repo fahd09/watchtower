@@ -1,6 +1,6 @@
 {
   "name": "watchtower-ai",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Watchtower — monitor, inspect, and debug all API traffic between AI coding agents (Claude Code, Codex CLI, OpenAI-compatible clients) and their APIs, with a real-time web dashboard.",
   "type": "module",
   "main": "intercept.mjs",
@@ -35,16 +35,14 @@
   },
   "homepage": "https://github.com/fahd09/watchtower",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "intercept.mjs",
+    "ws-server.mjs",
     "dashboard.html",
     "providers/",
     "LICENSE",
     "README.md"
-  ],
-  "dependencies": {
-    "ws": "^8.19.0"
-  }
+  ]
 }

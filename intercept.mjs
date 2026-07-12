@@ -9,7 +9,7 @@ import { URL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { WebSocketServer } from "ws";
+import { WebSocketServer } from "./ws-server.mjs";
 
 import anthropicProvider from "./providers/anthropic.mjs";
 import openaiProvider from "./providers/openai.mjs";
@@ -17,6 +17,12 @@ import openaiProvider from "./providers/openai.mjs";
 const PROXY_PORT = parseInt(process.argv[2] || "8024", 10);
 const DASHBOARD_PORT = parseInt(process.argv[3] || "8025", 10);
 const LOG_DIR = path.join(process.cwd(), "logs");
+
+// Opt-in request rewriting. When enabled, providers may transparently modify
+// the outgoing request. Currently this reveals hidden extended-thinking by
+// flipping thinking.display "omitted" → "summarized" on Anthropic requests.
+// Off by default so the proxy is byte-for-byte transparent unless asked.
+const REVEAL_THINKING = /^(1|true|yes|on)$/i.test(process.env.WATCHTOWER_REVEAL_THINKING || "");
 
 const providers = { anthropic: anthropicProvider, openai: openaiProvider };
 
@@ -127,8 +133,19 @@ const proxyServer = http.createServer(async (req, res) => {
   } catch {
     decodedBody = rawBodyBuffer.toString("utf-8");
   }
-  const rawRequestBody = rawBodyBuffer; // Original bytes for forwarding
   const requestBodyParsed = tryParseJson(decodedBody);
+
+  // Optional request rewriting (opt-in). If a provider mutates the body we
+  // forward the re-serialized JSON instead of the original bytes.
+  let rawRequestBody = rawBodyBuffer; // Original bytes for forwarding
+  let mutation = null;
+  if (REVEAL_THINKING && provider.revealThinking && requestBodyParsed) {
+    const rewritten = provider.revealThinking(requestBodyParsed);
+    if (rewritten) {
+      rawRequestBody = Buffer.from(JSON.stringify(rewritten), "utf-8");
+      mutation = "thinking.display: omitted → summarized";
+    }
+  }
 
   // Resolve target — provider may pick a different upstream based on auth type
   const resolved = provider.resolveTarget
@@ -170,6 +187,7 @@ const proxyServer = http.createServer(async (req, res) => {
     maxTokens: fields.maxTokens,
     metadata: fields.metadata,
     contextManagement: fields.contextManagement,
+    mutation, // non-null if we rewrote the outgoing request
     // Response fields - filled later
     status: null,
     responseHeaders: null,
@@ -184,6 +202,7 @@ const proxyServer = http.createServer(async (req, res) => {
   const parentTag = parentId ? ` parent=#${parentId}` : "";
   const provTag = provider.name === "openai" ? " [openai]" : "";
   log(">>>", `#${reqId} ${req.method} ${req.url} [${requestType}] [${agentRole}${parentTag}]${provTag} model=${record.model || "n/a"}`);
+  if (mutation) log("INFO", `#${reqId} request rewritten (${mutation})`);
   broadcast("request_start", {
     id: reqId,
     provider: provider.name,
@@ -202,11 +221,19 @@ const proxyServer = http.createServer(async (req, res) => {
     requestHeaders: record.requestHeaders,
   });
 
-  // Forward to target — remove accept-encoding so we get plain text
+  // Forward to target. We keep the client's accept-encoding untouched so the
+  // upstream compresses exactly as it would without the proxy — we forward
+  // those original bytes to the client verbatim (transparent pass-through) and
+  // only decompress a private copy for our own logging/parsing.
   const proxyHeaders = { ...req.headers };
   delete proxyHeaders["host"];
-  delete proxyHeaders["accept-encoding"];
   proxyHeaders["host"] = targetUrl.host;
+  // If we rewrote the body, we re-serialized it as plain JSON — drop any
+  // request content-encoding and fix the length to match the new bytes.
+  if (mutation) {
+    delete proxyHeaders["content-encoding"];
+    proxyHeaders["content-length"] = String(rawRequestBody.length);
+  }
 
   const proxyReq = https.request(targetUrl, { method: req.method, headers: proxyHeaders }, (proxyRes) => {
     // Detect SSE: check content-type first, then fall back to request's accept header
@@ -222,14 +249,19 @@ const proxyServer = http.createServer(async (req, res) => {
 
     log("<<<", `#${reqId} ${proxyRes.statusCode} [${isSSE ? "SSE" : "JSON"}]${provTag}`);
 
-    // For the client, we forward without content-encoding since we stripped accept-encoding
+    // Forward the upstream's headers to the client as-is, preserving
+    // content-encoding: the body we pass through is byte-identical to what the
+    // upstream sent, so the client decompresses it exactly as it normally would.
+    // We drop transfer-encoding because we re-frame the response ourselves.
     const clientHeaders = { ...proxyRes.headers };
-    delete clientHeaders["content-encoding"];
     delete clientHeaders["transfer-encoding"];
     res.writeHead(proxyRes.statusCode, clientHeaders);
 
     if (isSSE) {
       // ── SSE stream handling ──
+      // Two consumers of the upstream stream:
+      //   1. proxyRes  → client, raw bytes untouched (preserves compression)
+      //   2. parseSource → a decompressed copy we parse for events/logging
       let sseBuffer = "";
       let rawResponseChunks = [];
       let decompressor = null;
@@ -239,12 +271,16 @@ const proxyServer = http.createServer(async (req, res) => {
       else if (encoding === "deflate") decompressor = zlib.createInflate();
       else if (encoding === "zstd" && zlib.createZstdDecompress) decompressor = zlib.createZstdDecompress();
 
-      const source = decompressor ? proxyRes.pipe(decompressor) : proxyRes;
+      const parseSource = decompressor ? proxyRes.pipe(decompressor) : proxyRes;
 
-      source.on("data", (chunk) => {
+      // (1) Forward original bytes to the client, verbatim.
+      proxyRes.on("data", (chunk) => res.write(chunk));
+      proxyRes.on("end", () => res.end());
+
+      // (2) Parse a decompressed copy for our own SSE event capture.
+      parseSource.on("data", (chunk) => {
         const text = chunk.toString("utf-8");
         rawResponseChunks.push(text);
-        res.write(text);
 
         const { events, remainingBuffer } = provider.parseSSEChunk(text, sseBuffer);
         sseBuffer = remainingBuffer;
@@ -274,7 +310,7 @@ const proxyServer = http.createServer(async (req, res) => {
         }
       });
 
-      source.on("end", () => {
+      parseSource.on("end", () => {
         record.responseBody = provider.assembleResponse
           ? provider.assembleResponse(record.sseEvents)
           : rawResponseChunks.join("");
@@ -282,10 +318,14 @@ const proxyServer = http.createServer(async (req, res) => {
         log("<<<", `#${reqId} Stream ended. ${record.sseEvents.length} events, ${record.duration}ms`);
         broadcast("request_end", { id: reqId, duration: record.duration, eventCount: record.sseEvents.length, rateLimits: record.rateLimits });
         saveLog(record);
-        res.end();
       });
 
-      source.on("error", (err) => {
+      parseSource.on("error", (err) => {
+        record.error = err.message;
+        log("ERR", `#${reqId} Stream parse error: ${err.message}`);
+      });
+      // If the raw upstream stream errors, tear down the client response.
+      proxyRes.on("error", (err) => {
         record.error = err.message;
         log("ERR", `#${reqId} Stream error: ${err.message}`);
         res.end();
@@ -296,6 +336,9 @@ const proxyServer = http.createServer(async (req, res) => {
       proxyRes.on("data", (c) => chunks.push(c));
       proxyRes.on("end", async () => {
         const raw = Buffer.concat(chunks);
+        // Forward the original (possibly compressed) bytes to the client, then
+        // decompress a private copy for logging.
+        res.end(raw);
         try {
           const decompressed = await decompressBuffer(raw, encoding);
           const text = decompressed.toString("utf-8");
@@ -304,15 +347,12 @@ const proxyServer = http.createServer(async (req, res) => {
           log("<<<", `#${reqId} ${text.length} bytes, ${record.duration}ms`);
           broadcast("request_end", { id: reqId, duration: record.duration, responseBody: record.responseBody, rateLimits: record.rateLimits, status: record.status });
           saveLog(record);
-          res.write(decompressed);
-          res.end();
         } catch (err) {
-          // If decompression fails, forward raw
           record.responseBody = "(binary/compressed - decompression failed)";
           record.duration = Date.now() - startTime;
+          log("ERR", `#${reqId} Decompression failed: ${err.message}`);
           broadcast("request_end", { id: reqId, duration: record.duration, error: err.message });
-          res.write(raw);
-          res.end();
+          saveLog(record);
         }
       });
     }
@@ -330,6 +370,26 @@ const proxyServer = http.createServer(async (req, res) => {
   if (rawRequestBody.length > 0) proxyReq.write(rawRequestBody);
   proxyReq.end();
 });
+
+// Best-effort token usage for a record, merged across providers/streaming.
+// Anthropic streaming: message_start carries input/cache, message_delta the
+// final output_tokens — merge both. Non-streaming / assembled bodies and
+// OpenAI usage come straight off the response.
+function extractUsage(record) {
+  const evs = record.sseEvents || [];
+  const ms = evs.find((e) => e.type === "message_start")?.data?.message?.usage;
+  const md = evs.find((e) => e.type === "message_delta")?.data?.usage;
+  if (ms || md) return { ...(ms || {}), ...(md || {}) };
+  const usageEv = evs.find((e) => e.data?.usage);
+  if (usageEv?.data?.usage) return usageEv.data.usage;
+  const done = evs.find((e) => e.type === "response.completed" || e.type === "response.done");
+  if (done?.data?.response?.usage) return done.data.response.usage;
+  if (done?.data?.usage) return done.data.usage;
+  if (record.responseBody && typeof record.responseBody === "object" && record.responseBody.usage) {
+    return record.responseBody.usage;
+  }
+  return null;
+}
 
 function saveLog(record) {
   const filename = `${String(record.id).padStart(4, "0")}_${record.type}_${record.model || "unknown"}.json`;
@@ -362,6 +422,8 @@ const dashboardServer = http.createServer((req, res) => {
       messageCount: r.messages?.length || 0,
       toolCount: r.tools?.length || 0,
       error: r.error,
+      mutation: r.mutation || null,
+      usage: extractUsage(r), // token usage for cost totals without loading full detail
     }));
     res.end(JSON.stringify(summary));
   } else if (req.url.startsWith("/api/request/")) {
