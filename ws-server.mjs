@@ -128,8 +128,11 @@ class WSConnection extends EventEmitter {
         } catch {
           this._markClosed();
         }
+      } else if (opcode === 0x1) {
+        // text frame from the client — surface it (used for control messages)
+        this.emit("message", payload.toString("utf-8"));
       }
-      // opcode 0x0/0x1/0x2/0xa (continuation/text/binary/pong): ignore
+      // opcode 0x0/0x2/0xa (continuation/binary/pong): ignore
     }
   }
 }

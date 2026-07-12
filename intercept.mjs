@@ -54,6 +54,17 @@ const store = {
 // API) so replays can reuse the original auth. Keyed by request id.
 const realHeadersById = new Map();
 
+// ─── Breakpoints ────────────────────────────────────────────────────
+// When enabled, matching requests pause before forwarding so the dashboard can
+// edit the body and forward, or drop the request. pausedRequests holds each
+// paused request's resolver, called from the dashboard control channel.
+const breakpoints = { enabled: false };
+const pausedRequests = new Map(); // reqId -> resolve({ action, body })
+const PAUSE_TYPES = new Set(["messages_stream", "messages", "responses_stream", "responses", "chat_stream", "chat_completion"]);
+function shouldPause(reqType) {
+  return breakpoints.enabled && PAUSE_TYPES.has(reqType);
+}
+
 let requestCounter = 0;
 
 // ─── Agent hierarchy tracking ────────────────────────────────────────
@@ -381,7 +392,7 @@ const proxyServer = http.createServer(async (req, res) => {
   } catch {
     decodedBody = rawBodyBuffer.toString("utf-8");
   }
-  const requestBodyParsed = tryParseJson(decodedBody);
+  let requestBodyParsed = tryParseJson(decodedBody);
 
   // Optional request rewriting (opt-in). If a provider mutates the body we
   // forward the re-serialized JSON instead of the original bytes.
@@ -392,6 +403,40 @@ const proxyServer = http.createServer(async (req, res) => {
     if (rewritten) {
       rawRequestBody = Buffer.from(JSON.stringify(rewritten), "utf-8");
       mutation = "thinking.display: omitted → summarized";
+    }
+  }
+
+  // ── Breakpoint: optionally pause before forwarding ──
+  const requestType = provider.classifyRequest(req.method, req.url, requestBodyParsed);
+  if (shouldPause(requestType)) {
+    log("INFO", `#${reqId} paused at breakpoint (${requestType})`);
+    broadcast("request_paused", {
+      id: reqId, provider: provider.name, method: req.method, url: req.url,
+      type: requestType, model: requestBodyParsed?.model || null,
+      body: requestBodyParsed ?? decodedBody,
+    });
+    const decision = await new Promise((resolve) => pausedRequests.set(reqId, resolve));
+    pausedRequests.delete(reqId);
+
+    if (decision.action === "drop") {
+      log("ERR", `#${reqId} dropped at breakpoint`);
+      const rec = buildRecord({
+        reqId, provider, method: req.method, url: req.url, realHeaders: req.headers,
+        parsed: requestBodyParsed, decodedBody, mutation: "dropped at breakpoint", startTime, updateHierarchy: true,
+      });
+      rec.status = 499; rec.error = "dropped at breakpoint"; rec.duration = Date.now() - startTime;
+      broadcast("request_end", { id: reqId, duration: rec.duration, error: rec.error, status: 499 });
+      saveLog(rec);
+      res.writeHead(499, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Request dropped by Watchtower breakpoint" }));
+      return;
+    }
+    if (decision.body != null) {
+      const newStr = typeof decision.body === "string" ? decision.body : JSON.stringify(decision.body);
+      rawRequestBody = Buffer.from(newStr, "utf-8");
+      requestBodyParsed = tryParseJson(newStr) ?? requestBodyParsed;
+      decodedBody = newStr;
+      mutation = "edited at breakpoint";
     }
   }
 
@@ -508,9 +553,36 @@ const dashboardServer = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server: dashboardServer });
 wss.on("connection", (ws) => {
   wsClients.add(ws);
-  // Send current state
-  ws.send(JSON.stringify({ event: "init", data: { requestCount: store.requests.length } }));
-  ws.on("close", () => wsClients.delete(ws));
+  // Send current state (incl. any requests currently paused at a breakpoint)
+  ws.send(JSON.stringify({ event: "init", data: {
+    requestCount: store.requests.length,
+    breakpointsEnabled: breakpoints.enabled,
+    paused: [...pausedRequests.keys()],
+  } }));
+
+  ws.on("message", (raw) => {
+    const msg = tryParseJson(raw);
+    if (!msg) return;
+    if (msg.type === "breakpoint_config") {
+      breakpoints.enabled = !!msg.enabled;
+      log("INFO", `breakpoints ${breakpoints.enabled ? "enabled" : "disabled"}`);
+      broadcast("breakpoint_config", { enabled: breakpoints.enabled });
+    } else if (msg.type === "breakpoint_decision") {
+      const resolve = pausedRequests.get(msg.id);
+      if (resolve) resolve({ action: msg.action, body: msg.body });
+    }
+  });
+
+  ws.on("close", () => {
+    wsClients.delete(ws);
+    // If the last dashboard disconnects, disable breakpoints and release any
+    // paused requests (forwarding them unedited) so they can't hang forever.
+    if (wsClients.size === 0 && breakpoints.enabled) {
+      breakpoints.enabled = false;
+      log("INFO", `breakpoints disabled (no dashboard connected); releasing ${pausedRequests.size} paused request(s)`);
+      for (const [, resolve] of pausedRequests) resolve({ action: "forward" });
+    }
+  });
 });
 
 // ─── Start ──────────────────────────────────────────────────────────

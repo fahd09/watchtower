@@ -201,6 +201,7 @@
     user-select: none;
   }
   .filter-toggles input { cursor: pointer; }
+  .bp-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); vertical-align: middle; }
 
   /* ── Turn groups ───────────────────────────────────── */
   .turn-header {
@@ -1150,6 +1151,7 @@
         <label title="Hide token_count and quota_check requests"><input type="checkbox" id="filterHideUtil" onchange="onFilterChange()"> Hide noise</label>
         <label title="Show only errors (4xx/5xx or proxy errors)"><input type="checkbox" id="filterErrors" onchange="onFilterChange()"> Errors only</label>
         <label title="Group each turn's requests (utility + subagents) under its main call"><input type="checkbox" id="filterGroup" onchange="onFilterChange()"> Group turns</label>
+        <label title="Pause chat requests before forwarding so you can edit or drop them"><input type="checkbox" id="bpToggle" onchange="toggleBreakpoints()"> <span class="bp-dot"></span> Breakpoints</label>
       </div>
     </div>
     <div class="request-list" id="requestList"></div>
@@ -1174,14 +1176,14 @@
   <div class="modal">
     <div class="modal-header">
       <span id="replayTitle">Replay request</span>
-      <button class="modal-close" onclick="closeReplay()">✕</button>
+      <button class="modal-close" onclick="modalX()" title="Close">✕</button>
     </div>
     <div class="modal-hint">Edit the request body below and send it upstream with the original request's auth. The result is captured as a new request.</div>
     <textarea id="replayBody" class="modal-textarea" spellcheck="false"></textarea>
     <div class="modal-error" id="replayError"></div>
     <div class="modal-actions">
-      <button class="btn-secondary" onclick="closeReplay()">Cancel</button>
-      <button class="btn-primary" id="replaySend" onclick="sendReplay()">Send replay</button>
+      <button class="btn-secondary" id="modalSecondary" onclick="modalSecondary()">Cancel</button>
+      <button class="btn-primary" id="modalPrimary" onclick="modalPrimary()">Send replay</button>
     </div>
   </div>
 </div>
@@ -1215,6 +1217,9 @@ const state = {
   groupTurns: false,
   collapsedTurns: new Set(),
   replayId: null,
+  modalMode: 'replay', // 'replay' | 'breakpoint'
+  pausedId: null,
+  pausedQueue: [],
 };
 
 // ─── Sidebar filtering ──────────────────────────────────────────────
@@ -1288,6 +1293,20 @@ function connectWs() {
 
 function handleWsMessage(msg) {
   const { event, data } = msg;
+
+  if (msg.event === 'init') {
+    const cb = document.getElementById('bpToggle');
+    if (cb) cb.checked = !!data?.breakpointsEnabled;
+  }
+
+  if (event === 'breakpoint_config') {
+    const cb = document.getElementById('bpToggle');
+    if (cb) cb.checked = !!data?.enabled;
+  }
+
+  if (event === 'request_paused') {
+    onPaused(data);
+  }
 
   if (event === 'request_start') {
     state.requests.set(data.id, {
@@ -1490,14 +1509,26 @@ function selectRequest(id) {
   }).catch(() => renderDetail());
 }
 
-// ─── Replay ─────────────────────────────────────────────────────────
+// ─── Modal: replay & breakpoints ────────────────────────────────────
+function modalOpen() { return document.getElementById('replayModal').classList.contains('open'); }
+function closeModal() { document.getElementById('replayModal').classList.remove('open'); }
+function setModalButtons(primary, secondary) {
+  document.getElementById('modalPrimary').textContent = primary;
+  document.getElementById('modalSecondary').textContent = secondary;
+}
+function modalPrimary() { state.modalMode === 'breakpoint' ? forwardBreakpoint() : sendReplay(); }
+function modalSecondary() { state.modalMode === 'breakpoint' ? dropBreakpoint() : closeModal(); }
+
 function openReplay(id) {
   const show = (r) => {
+    state.modalMode = 'replay';
     state.replayId = id;
     document.getElementById('replayTitle').textContent = `Replay request #${id}`;
+    document.querySelector('.modal-hint').textContent = "Edit the request body and send it upstream with the original request's auth. The result is captured as a new request.";
     const body = (r && r.requestBody !== undefined) ? r.requestBody : {};
     document.getElementById('replayBody').value = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
     document.getElementById('replayError').textContent = '';
+    setModalButtons('Send replay', 'Cancel');
     document.getElementById('replayModal').classList.add('open');
   };
   const req = state.requests.get(id);
@@ -1507,24 +1538,66 @@ function openReplay(id) {
     show(state.requests.get(id));
   }).catch(() => show(req));
 }
-function closeReplay() { document.getElementById('replayModal').classList.remove('open'); }
 function sendReplay() {
   const id = state.replayId;
   const bodyText = document.getElementById('replayBody').value;
   const errEl = document.getElementById('replayError');
   try { JSON.parse(bodyText); errEl.textContent = ''; }
   catch (e) { errEl.textContent = 'Note: body is not valid JSON — sending exactly as typed.'; }
-  const btn = document.getElementById('replaySend');
+  const btn = document.getElementById('modalPrimary');
   btn.disabled = true; btn.textContent = 'Sending…';
   fetch('/api/replay', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, body: bodyText }) })
     .then(r => r.json()).then(res => {
       btn.disabled = false; btn.textContent = 'Send replay';
       if (res.error) { errEl.textContent = res.error; return; }
-      closeReplay();
+      closeModal();
       let tries = 0;
       const trySelect = () => { if (state.requests.has(res.id) || tries++ > 40) selectRequest(res.id); else setTimeout(trySelect, 150); };
       trySelect();
     }).catch(e => { btn.disabled = false; btn.textContent = 'Send replay'; errEl.textContent = 'Request failed: ' + e.message; });
+}
+
+// ─── Breakpoints ────────────────────────────────────────────────────
+function toggleBreakpoints() {
+  const enabled = !!document.getElementById('bpToggle').checked;
+  if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: 'breakpoint_config', enabled }));
+}
+function onPaused(data) {
+  state.pausedQueue.push(data);
+  showNextPaused();
+}
+function showNextPaused() {
+  if (modalOpen()) return; // a modal is already up; this one waits its turn
+  const d = state.pausedQueue.shift();
+  if (!d) return;
+  state.modalMode = 'breakpoint';
+  state.pausedId = d.id;
+  document.getElementById('replayTitle').textContent = `⏸ Paused: ${d.type} #${d.id}`;
+  document.querySelector('.modal-hint').textContent = `This request is held before forwarding. Edit the body and Forward it upstream, or Drop it. (${state.pausedQueue.length} more queued)`;
+  const body = d.body;
+  document.getElementById('replayBody').value = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+  document.getElementById('replayError').textContent = '';
+  setModalButtons('Forward', 'Drop');
+  document.getElementById('replayModal').classList.add('open');
+}
+function forwardBreakpoint() {
+  const bodyText = document.getElementById('replayBody').value;
+  const errEl = document.getElementById('replayError');
+  let bodyToSend = bodyText;
+  try { bodyToSend = JSON.parse(bodyText); errEl.textContent = ''; }
+  catch (e) { /* send as raw string if not valid JSON */ }
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: 'breakpoint_decision', id: state.pausedId, action: 'forward', body: bodyToSend }));
+  }
+  closeModal();
+  showNextPaused();
+}
+function dropBreakpoint() {
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: 'breakpoint_decision', id: state.pausedId, action: 'drop' }));
+  }
+  closeModal();
+  showNextPaused();
 }
 
 // ─── Render detail panel ────────────────────────────────────────────
@@ -2865,12 +2938,14 @@ function updateStats() {
 
 setInterval(updateStats, 1000);
 
-// Close the replay modal on overlay click or Escape.
+// Close the modal on overlay click or Escape — but not in breakpoint mode,
+// where the request is genuinely held and needs an explicit Forward/Drop.
+function modalX() { if (state.modalMode !== 'breakpoint') closeModal(); }
 document.getElementById('replayModal').addEventListener('click', (e) => {
-  if (e.target === e.currentTarget) closeReplay();
+  if (e.target === e.currentTarget) modalX();
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeReplay();
+  if (e.key === 'Escape') modalX();
 });
 
 // ─── Boot ───────────────────────────────────────────────────────────
