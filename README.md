@@ -75,7 +75,7 @@ node intercept.mjs 9000 9001
 
 | Tab | What it shows |
 |-----|--------------|
-| **Overview** | Duration, model, status, token counts, estimated cost, rate limits |
+| **Overview** | Duration, model, status, token counts, estimated cost, TTFT/throughput, context-window gauge, rate limits |
 | **Messages** | Full conversation history (user/assistant messages) |
 | **Turn Diff** | What changed in the messages vs the previous request |
 | **Sys Diff** | Line-level diff of the system prompt vs the previous request |
@@ -179,12 +179,12 @@ Recently shipped:
 - ✅ Zero-dependency (dropped the `ws` package)
 - ✅ Transparent gzip pass-through (forwards original bytes to the client)
 - ✅ Reveal hidden extended thinking (request rewriting)
+- ✅ Observability: TTFT, throughput (tok/s), context-window gauge
 
 Planned:
 
 - Agent hierarchy tree visualization
 - Export (session/request as JSON, HAR, or HTML)
-- TTFT / tokens-per-sec and context-window gauge
 
 ## Contributing
 
