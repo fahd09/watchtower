@@ -21,6 +21,8 @@ AI coding agents make dozens of API calls per interaction — streaming messages
 - SSE stream events in real time
 - **Live cost & token tracker** — cumulative session cost and token count in the header, plus per-request cost from model list prices
 - **Search & filter** — full-text search across models, types, tools, and message content; hide `token_count`/`quota_check` noise; show errors only
+- **Conversation grouping** — fold each turn's utility calls and subagents under its main request
+- **System-prompt & turn diffs** — see exactly what changed vs the previous request
 - **Copy buttons** on every JSON block, system prompt, and message
 - Agent hierarchy tracking (main agent → subagents → utility calls)
 - Token usage, rate limits, and timing
@@ -74,6 +76,8 @@ node intercept.mjs 9000 9001
 |-----|--------------|
 | **Overview** | Duration, model, status, token counts, estimated cost, rate limits |
 | **Messages** | Full conversation history (user/assistant messages) |
+| **Turn Diff** | What changed in the messages vs the previous request |
+| **Sys Diff** | Line-level diff of the system prompt vs the previous request |
 | **Response** | Pretty-printed response JSON |
 | **Tools** | Tool definitions with searchable parameters and schemas |
 | **Stream** | Raw SSE events with expandable payloads |
@@ -160,16 +164,17 @@ Recently shipped:
 
 - ✅ Cost & token tracking
 - ✅ Search & filter (sidebar) + copy buttons
+- ✅ Conversation grouping (fold each turn's requests into one unit)
+- ✅ System-prompt diff & turn diff (what changed vs the previous request)
 - ✅ Zero-dependency (dropped the `ws` package)
 - ✅ Transparent gzip pass-through (forwards original bytes to the client)
 - ✅ Reveal hidden extended thinking (request rewriting)
 
 Planned:
 
-- System prompt diffing (what changed each turn)
 - Request replay & modification (Burp Suite for Claude)
 - Agent hierarchy tree visualization
-- Conversation grouping (fold quota check + token count + messages into one turn)
+- Export (session/request as JSON, HAR, or HTML)
 
 ## Contributing
 
