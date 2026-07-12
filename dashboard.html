@@ -202,6 +202,27 @@
   }
   .filter-toggles input { cursor: pointer; }
 
+  /* ── Turn groups ───────────────────────────────────── */
+  .turn-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .turn-header:hover { background: var(--bg); }
+  .turn-caret { color: var(--text-dim); width: 10px; }
+  .turn-label { font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; }
+  .turn-model { color: var(--cyan); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .turn-stats { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
+  .turn-members { border-bottom: 2px solid var(--border); }
+
   /* ── Copy buttons ──────────────────────────────────── */
   .has-copy { position: relative; }
   .copy-btn {
@@ -1060,6 +1081,7 @@
       <div class="filter-toggles">
         <label title="Hide token_count and quota_check requests"><input type="checkbox" id="filterHideUtil" onchange="onFilterChange()"> Hide noise</label>
         <label title="Show only errors (4xx/5xx or proxy errors)"><input type="checkbox" id="filterErrors" onchange="onFilterChange()"> Errors only</label>
+        <label title="Group each turn's requests (utility + subagents) under its main call"><input type="checkbox" id="filterGroup" onchange="onFilterChange()"> Group turns</label>
       </div>
     </div>
     <div class="request-list" id="requestList"></div>
@@ -1105,6 +1127,8 @@ const state = {
   startTime: Date.now(),
   totalEvents: 0,
   filter: { q: '', hideUtility: false, errorsOnly: false },
+  groupTurns: false,
+  collapsedTurns: new Set(),
 };
 
 // ─── Sidebar filtering ──────────────────────────────────────────────
@@ -1112,6 +1136,7 @@ function onFilterChange() {
   state.filter.q = (document.getElementById('filterQ')?.value || '').trim().toLowerCase();
   state.filter.hideUtility = !!document.getElementById('filterHideUtil')?.checked;
   state.filter.errorsOnly = !!document.getElementById('filterErrors')?.checked;
+  state.groupTurns = !!document.getElementById('filterGroup')?.checked;
   renderSidebar();
 }
 
@@ -1243,32 +1268,19 @@ function handleWsMessage(msg) {
 }
 
 // ─── Sidebar render ─────────────────────────────────────────────────
-function renderSidebar() {
-  const list = document.getElementById('requestList');
-  const all = [...state.requests.values()].sort((a, b) => b.id - a.id);
-  const items = all.filter(matchesFilter);
-  const hidden = all.length - items.length;
-  document.getElementById('reqCount').textContent = hidden > 0 ? `${items.length}/${all.length}` : all.length;
-  document.getElementById('statReqs').textContent = all.length;
+function requestItemHtml(r) {
+  const role = r.agentRole || 'utility';
+  const isChild = role === 'subagent' || (role === 'utility' && r.parentId);
+  const indentClass = role === 'subagent' ? 'subagent' : (isChild ? 'utility-child' : '');
+  const activeClass = state.selectedId === r.id ? 'active' : '';
+  const roleTag = role !== 'utility'
+    ? `<span class="agent-role-tag ${role}">${role}</span>`
+    : (r.parentId ? `<span class="agent-role-tag utility">util</span>` : '');
+  const providerTag = r.provider === 'openai'
+    ? '<span class="provider-tag openai">OAI</span>'
+    : (r.provider === 'anthropic' ? '<span class="provider-tag anthropic">ANT</span>' : '');
 
-  if (items.length === 0 && all.length > 0) {
-    list.innerHTML = `<div style="padding: 16px; font-size: 12px; color: var(--text-dim); text-align: center;">No requests match the filter.<br>${hidden} hidden.</div>`;
-    return;
-  }
-
-  list.innerHTML = items.map(r => {
-    const role = r.agentRole || 'utility';
-    const isChild = role === 'subagent' || (role === 'utility' && r.parentId);
-    const indentClass = role === 'subagent' ? 'subagent' : (isChild ? 'utility-child' : '');
-    const activeClass = state.selectedId === r.id ? 'active' : '';
-    const roleTag = role !== 'utility'
-      ? `<span class="agent-role-tag ${role}">${role}</span>`
-      : (r.parentId ? `<span class="agent-role-tag utility">util</span>` : '');
-    const providerTag = r.provider === 'openai'
-      ? '<span class="provider-tag openai">OAI</span>'
-      : (r.provider === 'anthropic' ? '<span class="provider-tag anthropic">ANT</span>' : '');
-
-    return `
+  return `
     <div class="request-item ${indentClass} ${activeClass}" onclick="selectRequest(${r.id})">
       ${r.streaming ? '<div class="req-streaming"></div>' : ''}
       <div class="req-top">
@@ -1281,8 +1293,101 @@ function renderSidebar() {
         <span>${r.duration ? r.duration + 'ms' : 'streaming...'}</span>
         ${r.sseEventCount ? '<span>' + r.sseEventCount + ' events</span>' : ''}
       </div>
-    </div>
-  `}).join('');
+    </div>`;
+}
+
+// Group requests into logical "turns": each top-level chat request plus the
+// utility calls (token_count, quota_check) and subagent requests that belong
+// to it. Utilities that precede a turn's main request are folded into it.
+const CHAT_TYPES = new Set(['messages_stream', 'messages', 'responses_stream', 'responses', 'chat_stream', 'chat_completion']);
+function computeTurns() {
+  const items = [...state.requests.values()].sort((a, b) => a.id - b.id);
+  const byId = new Map(items.map(r => [r.id, r]));
+  const isAnchor = r => CHAT_TYPES.has(r.type) && r.agentRole === 'main' && !r.parentId;
+  const topAncestor = r => {
+    let cur = r, guard = 0;
+    while (cur.parentId && byId.has(cur.parentId) && guard++ < 50) cur = byId.get(cur.parentId);
+    return cur;
+  };
+  const turns = [];
+  const byAnchor = new Map();
+  let pending = [];
+  let turnNo = 0;
+  for (const r of items) {
+    if (isAnchor(r)) {
+      const t = { anchorId: r.id, anchor: r, members: [], no: ++turnNo };
+      byAnchor.set(r.id, t);
+      turns.push(t);
+      t.members.push(...pending);
+      pending = [];
+      t.members.push(r);
+    } else {
+      const anc = topAncestor(r);
+      if (anc !== r && isAnchor(anc) && byAnchor.has(anc.id)) byAnchor.get(anc.id).members.push(r);
+      else pending.push(r);
+    }
+  }
+  if (pending.length) turns.push({ anchorId: null, anchor: null, members: pending, no: null });
+  for (const t of turns) {
+    t.members.sort((a, b) => a.id - b.id);
+    let tok = 0, cost = 0, priced = false;
+    for (const m of t.members) {
+      const u = usageTokens(getMergedUsage(m));
+      if (u) tok += u.total;
+      const c = costFor(m);
+      if (c != null) { cost += c; priced = true; }
+    }
+    t.tokens = tok; t.cost = cost; t.priced = priced;
+  }
+  return turns;
+}
+
+function renderSidebar() {
+  const list = document.getElementById('requestList');
+  const all = [...state.requests.values()];
+  const total = all.length;
+  const shownSet = new Set(all.filter(matchesFilter).map(r => r.id));
+  const hidden = total - shownSet.size;
+  document.getElementById('reqCount').textContent = hidden > 0 ? `${shownSet.size}/${total}` : total;
+  document.getElementById('statReqs').textContent = total;
+
+  if (shownSet.size === 0 && total > 0) {
+    list.innerHTML = `<div style="padding: 16px; font-size: 12px; color: var(--text-dim); text-align: center;">No requests match the filter.<br>${hidden} hidden.</div>`;
+    return;
+  }
+
+  if (state.groupTurns) {
+    const turns = computeTurns().filter(t => t.members.some(m => shownSet.has(m.id)));
+    turns.reverse(); // newest turn on top
+    list.innerHTML = turns.map(t => {
+      const members = t.members.filter(m => shownSet.has(m.id)).sort((a, b) => b.id - a.id);
+      const collapsed = state.collapsedTurns.has(t.anchorId);
+      const label = t.no ? `Turn ${t.no}` : 'Ungrouped';
+      const model = t.anchor?.model || members[0]?.model || '';
+      const costTag = t.priced ? ` · ${fmtCost(t.cost)}` : '';
+      const streaming = members.some(m => m.streaming);
+      return `
+        <div class="turn-group">
+          <div class="turn-header ${collapsed ? 'collapsed' : ''}" onclick="toggleTurn(${t.anchorId === null ? 'null' : t.anchorId})">
+            <span class="turn-caret">${collapsed ? '▸' : '▾'}</span>
+            <span class="turn-label">${label}</span>
+            <span class="turn-model">${esc(model)}</span>
+            <span class="turn-stats">${members.length} req · ${t.tokens.toLocaleString()} tok${costTag}${streaming ? ' · <span style="color:var(--accent)">live</span>' : ''}</span>
+          </div>
+          ${collapsed ? '' : `<div class="turn-members">${members.map(requestItemHtml).join('')}</div>`}
+        </div>`;
+    }).join('');
+    return;
+  }
+
+  const items = all.filter(matchesFilter).sort((a, b) => b.id - a.id);
+  list.innerHTML = items.map(requestItemHtml).join('');
+}
+
+function toggleTurn(anchorId) {
+  if (state.collapsedTurns.has(anchorId)) state.collapsedTurns.delete(anchorId);
+  else state.collapsedTurns.add(anchorId);
+  renderSidebar();
 }
 
 // ─── Select request ─────────────────────────────────────────────────
