@@ -1,0 +1,21 @@
+# Watchtower monitoring profile for Codex CLI with ChatGPT-account (subscription) auth.
+#
+# Under ChatGPT login, Codex ignores OPENAI_BASE_URL and talks directly to
+# chatgpt.com/backend-api/codex — so the proxy never sees the traffic. This
+# profile points Codex's Responses API at the local Watchtower proxy while
+# keeping your ChatGPT OAuth login (requires_openai_auth = true). Watchtower
+# then forwards it to chatgpt.com, capturing everything.
+#
+# Install:  copy this file to  ~/.codex/watchtower.config.toml
+# Use:      codex --profile watchtower
+#
+# Your default ~/.codex/config.toml and the API-key OPENAI_BASE_URL path are
+# left completely untouched — this is opt-in per run.
+
+model_provider = "watchtower"
+
+[model_providers.watchtower]
+name = "watchtower"
+base_url = "http://localhost:8024"   # match your Watchtower proxy port
+wire_api = "responses"
+requires_openai_auth = true          # keep the ChatGPT OAuth token + account id

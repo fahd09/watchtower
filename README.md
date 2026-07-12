@@ -55,11 +55,37 @@ Then point your AI agent at the proxy:
 # Claude Code
 ANTHROPIC_BASE_URL=http://localhost:8024 claude
 
-# Codex CLI
+# Codex CLI (API-key auth)
 OPENAI_BASE_URL=http://localhost:8024 codex
 ```
 
 Open **http://localhost:8025** — that's it. Both providers share the same proxy port. Requests are auto-detected.
+
+> **Codex with a ChatGPT login (subscription auth)?** `OPENAI_BASE_URL` is ignored in that mode — Codex talks straight to `chatgpt.com` and the proxy never sees it. See [Codex + ChatGPT auth](#codex--chatgpt-account-auth) for the one-time profile setup.
+
+### Codex + ChatGPT account auth
+
+When Codex is logged in with a ChatGPT account (`auth_mode: chatgpt`), it sends its Responses API traffic directly to `chatgpt.com/backend-api/codex` and **ignores `OPENAI_BASE_URL`** — so pointing that env var at the proxy does nothing. Instead, add an opt-in Codex profile that routes the model calls through Watchtower while keeping your ChatGPT login.
+
+Save this as `~/.codex/watchtower.config.toml` (also included in the repo as [`docs/codex-watchtower.toml`](docs/codex-watchtower.toml)):
+
+```toml
+model_provider = "watchtower"
+
+[model_providers.watchtower]
+name = "watchtower"
+base_url = "http://localhost:8024"   # match your Watchtower proxy port
+wire_api = "responses"
+requires_openai_auth = true          # keep the ChatGPT OAuth token + account id
+```
+
+Then run Codex through the proxy:
+
+```bash
+codex --profile watchtower
+```
+
+Codex still attaches your ChatGPT OAuth token (`requires_openai_auth`); Watchtower forwards the request to `chatgpt.com` and captures it. Your default `config.toml` and the API-key `OPENAI_BASE_URL` path are untouched — it's opt-in per run.
 
 ## Usage
 
