@@ -231,6 +231,7 @@ const proxyServer = http.createServer(async (req, res) => {
     if (isSSE) {
       // ── SSE stream handling ──
       let sseBuffer = "";
+      let rawResponseChunks = [];
       let decompressor = null;
 
       if (encoding === "gzip") decompressor = zlib.createGunzip();
@@ -242,6 +243,7 @@ const proxyServer = http.createServer(async (req, res) => {
 
       source.on("data", (chunk) => {
         const text = chunk.toString("utf-8");
+        rawResponseChunks.push(text);
         res.write(text);
 
         const { events, remainingBuffer } = provider.parseSSEChunk(text, sseBuffer);
@@ -273,6 +275,9 @@ const proxyServer = http.createServer(async (req, res) => {
       });
 
       source.on("end", () => {
+        record.responseBody = provider.assembleResponse
+          ? provider.assembleResponse(record.sseEvents)
+          : rawResponseChunks.join("");
         record.duration = Date.now() - startTime;
         log("<<<", `#${reqId} Stream ended. ${record.sseEvents.length} events, ${record.duration}ms`);
         broadcast("request_end", { id: reqId, duration: record.duration, eventCount: record.sseEvents.length, rateLimits: record.rateLimits });
