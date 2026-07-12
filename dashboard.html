@@ -166,6 +166,63 @@
     align-items: center;
   }
 
+  /* ── Sidebar filter ────────────────────────────────── */
+  .sidebar-filter {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .filter-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+  }
+  .filter-input:focus { border-color: var(--accent); }
+  .filter-toggles {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .filter-toggles label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .filter-toggles input { cursor: pointer; }
+
+  /* ── Copy buttons ──────────────────────────────────── */
+  .has-copy { position: relative; }
+  .copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 2;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .has-copy:hover .copy-btn { opacity: 0.85; }
+  .copy-btn:hover { opacity: 1; color: var(--text); border-color: var(--accent); }
+
   .request-list {
     flex: 1;
     overflow-y: auto;
@@ -998,6 +1055,13 @@
       <span>Requests</span>
       <span id="reqCount">0</span>
     </div>
+    <div class="sidebar-filter">
+      <input id="filterQ" class="filter-input" type="text" placeholder="Search model, type, tools, text…" oninput="onFilterChange()">
+      <div class="filter-toggles">
+        <label title="Hide token_count and quota_check requests"><input type="checkbox" id="filterHideUtil" onchange="onFilterChange()"> Hide noise</label>
+        <label title="Show only errors (4xx/5xx or proxy errors)"><input type="checkbox" id="filterErrors" onchange="onFilterChange()"> Errors only</label>
+      </div>
+    </div>
     <div class="request-list" id="requestList"></div>
   </div>
 
@@ -1040,7 +1104,46 @@ const state = {
   connected: false,
   startTime: Date.now(),
   totalEvents: 0,
+  filter: { q: '', hideUtility: false, errorsOnly: false },
 };
+
+// ─── Sidebar filtering ──────────────────────────────────────────────
+function onFilterChange() {
+  state.filter.q = (document.getElementById('filterQ')?.value || '').trim().toLowerCase();
+  state.filter.hideUtility = !!document.getElementById('filterHideUtil')?.checked;
+  state.filter.errorsOnly = !!document.getElementById('filterErrors')?.checked;
+  renderSidebar();
+}
+
+// Lowercased searchable text for a request. Uses whatever fields are loaded —
+// live requests carry system/messages/tools from request_start; reloaded ones
+// fall back to summary fields. Cached and invalidated when the request grows.
+function requestSearchText(r) {
+  const stamp = `${r.sseEventCount || 0}:${r.status || ''}:${r.messages?.length || 0}`;
+  if (r._searchStamp === stamp && r._search != null) return r._search;
+  const parts = [r.id, r.type, r.model, r.provider, r.agentRole, r.status, r.error];
+  if (typeof r.system === 'string') parts.push(r.system.slice(0, 4000));
+  else if (Array.isArray(r.system)) parts.push(JSON.stringify(r.system).slice(0, 4000));
+  if (Array.isArray(r.tools)) for (const t of r.tools) parts.push(t?.name);
+  if (Array.isArray(r.messages)) {
+    for (const m of r.messages) {
+      const c = m?.content;
+      if (typeof c === 'string') parts.push(c.slice(0, 2000));
+      else if (Array.isArray(c)) for (const b of c) { if (b?.text) parts.push(b.text.slice(0, 2000)); }
+    }
+  }
+  r._search = parts.filter(Boolean).join(' ').toLowerCase();
+  r._searchStamp = stamp;
+  return r._search;
+}
+
+function matchesFilter(r) {
+  const f = state.filter;
+  if (f.hideUtility && (r.type === 'quota_check' || r.type === 'token_count')) return false;
+  if (f.errorsOnly && !(r.error || (typeof r.status === 'number' && r.status >= 400))) return false;
+  if (f.q && !requestSearchText(r).includes(f.q)) return false;
+  return true;
+}
 
 // ─── WebSocket ──────────────────────────────────────────────────────
 function connectWs() {
@@ -1142,9 +1245,16 @@ function handleWsMessage(msg) {
 // ─── Sidebar render ─────────────────────────────────────────────────
 function renderSidebar() {
   const list = document.getElementById('requestList');
-  const items = [...state.requests.values()].sort((a, b) => b.id - a.id);
-  document.getElementById('reqCount').textContent = items.length;
-  document.getElementById('statReqs').textContent = items.length;
+  const all = [...state.requests.values()].sort((a, b) => b.id - a.id);
+  const items = all.filter(matchesFilter);
+  const hidden = all.length - items.length;
+  document.getElementById('reqCount').textContent = hidden > 0 ? `${items.length}/${all.length}` : all.length;
+  document.getElementById('statReqs').textContent = all.length;
+
+  if (items.length === 0 && all.length > 0) {
+    list.innerHTML = `<div style="padding: 16px; font-size: 12px; color: var(--text-dim); text-align: center;">No requests match the filter.<br>${hidden} hidden.</div>`;
+    return;
+  }
 
   list.innerHTML = items.map(r => {
     const role = r.agentRole || 'utility';
@@ -1255,6 +1365,34 @@ function renderTabContent(req) {
     case 'raw': el.innerHTML = renderRaw(req); break;
     default: el.innerHTML = '';
   }
+  decorateCopyButtons(el);
+}
+
+// Add a hover "copy" button to every block of copyable content. Runs after
+// each render; the text is snapshotted at decoration time so streaming
+// re-renders keep it current.
+function decorateCopyButtons(root) {
+  const sel = '.json-block, .cb-body, .resp-block-body, .resp-thinking-body';
+  root.querySelectorAll(sel).forEach(el => {
+    const snapshot = el.textContent;
+    if (!snapshot || !snapshot.trim()) return;
+    el.classList.add('has-copy');
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.type = 'button';
+    btn.textContent = 'copy';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(snapshot).then(() => {
+        btn.textContent = 'copied!';
+        setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+      }).catch(() => {
+        btn.textContent = 'failed';
+        setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+      });
+    });
+    el.appendChild(btn);
+  });
 }
 
 // ─── Unified helpers (provider-agnostic) ────────────────────────────
