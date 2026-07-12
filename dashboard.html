@@ -982,6 +982,8 @@
     </div>
     <div class="header-stats" id="headerStats">
       <div>Requests: <span class="val" id="statReqs">0</span></div>
+      <div>Tokens: <span class="val" id="statTokens">0</span></div>
+      <div title="Estimated session cost from model list prices">Cost: <span class="val" id="statCost">$0</span></div>
       <div>SSE Events: <span class="val" id="statEvents">0</span></div>
       <div>Uptime: <span class="val" id="statUptime">0s</span></div>
       <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark mode">
@@ -1256,6 +1258,85 @@ function renderTabContent(req) {
 }
 
 // ─── Unified helpers (provider-agnostic) ────────────────────────────
+// ─── Cost & token accounting ────────────────────────────────────────
+// Prices are USD per 1M tokens: [input, output]. Cache write ≈ 1.25× input,
+// cache read ≈ 0.1× input (Anthropic 5-min TTL convention). Matched by the
+// longest model-id substring first, so specific ids win over families.
+const PRICING = [
+  ['claude-fable-5', [10, 50]], ['claude-mythos-5', [10, 50]],
+  ['claude-opus-4', [5, 25]], ['claude-3-opus', [15, 75]],
+  ['claude-sonnet-5', [3, 15]], ['claude-sonnet-4', [3, 15]], ['claude-3-5-sonnet', [3, 15]], ['claude-3-7-sonnet', [3, 15]],
+  ['claude-haiku-4-5', [1, 5]], ['claude-3-5-haiku', [0.8, 4]], ['claude-3-haiku', [0.25, 1.25]],
+  // OpenAI (approximate list prices)
+  ['gpt-4o-mini', [0.15, 0.6]], ['gpt-4o', [2.5, 10]], ['gpt-4.1-mini', [0.4, 1.6]], ['gpt-4.1', [2, 8]],
+  ['o3-mini', [1.1, 4.4]], ['o1-mini', [1.1, 4.4]], ['o1', [15, 60]], ['gpt-5', [1.25, 10]],
+];
+
+function priceFor(model) {
+  if (!model) return null;
+  const m = String(model).toLowerCase();
+  let best = null;
+  for (const [key, price] of PRICING) {
+    if (m.includes(key) && (!best || key.length > best[0].length)) best = [key, price];
+  }
+  return best ? best[1] : null;
+}
+
+// Merge usage across providers/streaming. Prefers the live SSE events the
+// dashboard accumulates; falls back to the summary `usage` field (page reload).
+function getMergedUsage(req) {
+  const evs = req.sseEvents || [];
+  const ms = evs.find(e => e.type === 'message_start')?.data?.message?.usage;
+  const md = evs.find(e => e.type === 'message_delta')?.data?.usage;
+  if (ms || md) return { ...(ms || {}), ...(md || {}) };
+  const usageEv = evs.find(e => e.data?.usage);
+  if (usageEv?.data?.usage) return usageEv.data.usage;
+  const done = evs.find(e => e.type === 'response.completed' || e.type === 'response.done');
+  if (done?.data?.response?.usage) return done.data.response.usage;
+  if (done?.data?.usage) return done.data.usage;
+  if (req.responseBody?.usage) return req.responseBody.usage;
+  if (req.usage) return req.usage; // from /api/requests summary
+  return null;
+}
+
+// Normalize a usage object to token counts we can price/aggregate.
+function usageTokens(u) {
+  if (!u) return null;
+  const inTok = u.input_tokens ?? u.prompt_tokens ?? 0;
+  const outTok = u.output_tokens ?? u.completion_tokens ?? 0;
+  const cacheWrite = u.cache_creation_input_tokens ?? 0;
+  const cacheRead = u.cache_read_input_tokens ?? (u.prompt_tokens_details?.cached_tokens ?? 0);
+  return { inTok, outTok, cacheWrite, cacheRead, total: inTok + outTok + cacheWrite + cacheRead };
+}
+
+// Returns dollars for a request, or null if the model isn't priced.
+function costFor(req) {
+  const price = priceFor(req.model);
+  const t = usageTokens(getMergedUsage(req));
+  if (!price || !t) return null;
+  const [pin, pout] = price;
+  return (t.inTok * pin + t.outTok * pout + t.cacheWrite * pin * 1.25 + t.cacheRead * pin * 0.1) / 1e6;
+}
+
+function fmtCost(dollars) {
+  if (dollars == null) return '—';
+  if (dollars === 0) return '$0';
+  if (dollars < 0.01) return '$' + dollars.toFixed(4);
+  return '$' + dollars.toFixed(2);
+}
+
+// Aggregate tokens + cost across all requests for the header bar.
+function sessionTotals() {
+  let cost = 0, tokens = 0, priced = false;
+  for (const r of state.requests.values()) {
+    const t = usageTokens(getMergedUsage(r));
+    if (t) tokens += t.total;
+    const c = costFor(r);
+    if (c != null) { cost += c; priced = true; }
+  }
+  return { cost, tokens, priced };
+}
+
 function getUsage(req) {
   // Anthropic: message_delta or message_start event
   const msgDelta = req.sseEvents?.find(e => e.type === 'message_delta');
@@ -1395,6 +1476,10 @@ function renderOverview(req) {
     for (const [k, v] of Object.entries(usage)) {
       const uDisp = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
       html += `<div class="kv-key">${esc(k)}</div><div class="kv-val" style="color: var(--orange); font-weight: 700">${esc(uDisp)}</div>`;
+    }
+    const oCost = costFor(req);
+    if (oCost != null) {
+      html += `<div class="kv-key">estimated cost</div><div class="kv-val" style="color: var(--green); font-weight: 700">${fmtCost(oCost)}</div>`;
     }
     html += `</div></div></div>`;
   }
@@ -1803,6 +1888,13 @@ function renderResponse(req) {
         <div class="usage-chip-value">${val.toLocaleString()}</div>
       </div>`;
     }
+    const reqCost = costFor(req);
+    if (reqCost != null) {
+      html += `<div class="usage-chip" style="border-color: var(--green);" title="Estimated from ${esc(req.model || '')} list price">
+        <div class="usage-chip-label" style="color: var(--green);">Cost</div>
+        <div class="usage-chip-value" style="color: var(--green);">${fmtCost(reqCost)}</div>
+      </div>`;
+    }
     html += '</div>';
   }
 
@@ -1822,7 +1914,15 @@ function renderResponse(req) {
           ${block.streaming ? '<span style="color: var(--orange);">streaming...</span>' : ''}
         </span>
       </div>`;
-      html += `<div class="resp-block-body resp-thinking-body">${esc(block.thinking || '')}</div>`;
+      if (block.thinking) {
+        html += `<div class="resp-block-body resp-thinking-body">${esc(block.thinking)}</div>`;
+      } else {
+        // Empty thinking + a signature = the model thought, but the API omitted
+        // the text (adaptive thinking with display:"omitted", the default on
+        // Opus 4.8/4.7, Sonnet 5, Fable 5). Explain rather than show a blank box.
+        const sig = block.signature ? ` (signature: ${block.signature.length} chars)` : '';
+        html += `<div class="resp-block-body resp-thinking-body" style="color: var(--text-dim); font-style: italic;">Thinking content omitted by the API${esc(sig)} — the model reasoned but only returned a signature, not the text. This is <code>thinking.display: "omitted"</code>. Start the proxy with <code>WATCHTOWER_REVEAL_THINKING=1</code> to rewrite requests to <code>"summarized"</code> and capture the reasoning.</div>`;
+      }
 
     } else if (block.type === 'text') {
       html += `<div class="resp-block-header type-text" onclick="this.nextElementSibling.classList.toggle('collapsed')">
@@ -2216,6 +2316,13 @@ function toggleSection(header) {
 
 function updateStats() {
   document.getElementById('statEvents').textContent = state.totalEvents;
+  const totals = sessionTotals();
+  document.getElementById('statTokens').textContent = totals.tokens.toLocaleString();
+  const costEl = document.getElementById('statCost');
+  costEl.textContent = totals.priced ? fmtCost(totals.cost) : '—';
+  costEl.title = totals.priced
+    ? 'Estimated session cost from model list prices'
+    : 'No priced models seen yet';
   const uptime = Math.floor((Date.now() - state.startTime) / 1000);
   const m = Math.floor(uptime / 60);
   const s = uptime % 60;
