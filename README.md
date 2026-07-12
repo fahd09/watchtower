@@ -20,6 +20,8 @@ AI coding agents make dozens of API calls per interaction — streaming messages
 - Every request and response, fully decoded
 - SSE stream events in real time
 - **Live cost & token tracker** — cumulative session cost and token count in the header, plus per-request cost from model list prices
+- **Search & filter** — full-text search across models, types, tools, and message content; hide `token_count`/`quota_check` noise; show errors only
+- **Copy buttons** on every JSON block, system prompt, and message
 - Agent hierarchy tracking (main agent → subagents → utility calls)
 - Token usage, rate limits, and timing
 - System prompts, tool definitions, full message history
@@ -157,16 +159,17 @@ Codex CLI    ──HTTP──┘          │              ──HTTPS──>  a
 Recently shipped:
 
 - ✅ Cost & token tracking
+- ✅ Search & filter (sidebar) + copy buttons
 - ✅ Zero-dependency (dropped the `ws` package)
 - ✅ Transparent gzip pass-through (forwards original bytes to the client)
 - ✅ Reveal hidden extended thinking (request rewriting)
 
-See [TODO.md](TODO.md) for the full roadmap, including planned features like:
+Planned:
 
-- Search & filter
-- System prompt diffing
+- System prompt diffing (what changed each turn)
 - Request replay & modification (Burp Suite for Claude)
 - Agent hierarchy tree visualization
+- Conversation grouping (fold quota check + token count + messages into one turn)
 
 ## Contributing
 
