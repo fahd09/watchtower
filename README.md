@@ -19,11 +19,15 @@ AI coding agents make dozens of API calls per interaction — streaming messages
 
 - Every request and response, fully decoded
 - SSE stream events in real time
+- **Live cost & token tracker** — cumulative session cost and token count in the header, plus per-request cost from model list prices
 - Agent hierarchy tracking (main agent → subagents → utility calls)
 - Token usage, rate limits, and timing
 - System prompts, tool definitions, full message history
+- **Reveal hidden extended thinking** — optionally rewrite requests so the API streams thinking summaries (see [Reveal thinking](#reveal-hidden-thinking))
 - Dark and light mode
 - All logged to disk as JSON for later analysis
+
+Zero runtime dependencies — it's a single script plus a self-contained dashboard. No `npm install`, no build step.
 
 ## Quick Start
 
@@ -32,13 +36,12 @@ npm install -g watchtower-ai
 watchtower-ai
 ```
 
-Or clone and run directly:
+Or clone and run directly — there are no dependencies to install:
 
 ```bash
 git clone https://github.com/fahd09/watchtower.git
 cd watchtower
-npm install
-npm start
+node intercept.mjs
 ```
 
 Then point your AI agent at the proxy:
@@ -67,7 +70,7 @@ node intercept.mjs 9000 9001
 
 | Tab | What it shows |
 |-----|--------------|
-| **Overview** | Duration, model, status, token counts, rate limits |
+| **Overview** | Duration, model, status, token counts, estimated cost, rate limits |
 | **Messages** | Full conversation history (user/assistant messages) |
 | **Response** | Pretty-printed response JSON |
 | **Tools** | Tool definitions with searchable parameters and schemas |
@@ -100,6 +103,22 @@ Each request is tagged with an agent role:
 - **subagent** — A spawned sub-agent (Explore, Plan, etc.)
 - **utility** — Token counts, quota checks, and tool-less calls
 
+### Cost & Token Tracking
+
+The header bar shows the running **token count** and **estimated cost** for the whole session, computed from each model's list price. Every request also shows its own cost in the Overview and Response tabs. Cache reads (~0.1×) and cache writes (~1.25×) are priced separately from fresh input. Unknown models show `—` instead of a wrong number.
+
+### Reveal hidden thinking
+
+On recent models (Opus 4.8/4.7, Sonnet 5, Fable 5), Claude Code requests extended thinking with `display: "omitted"` — the model reasons, but the API returns only a cryptographic signature, not the thinking text. Watchtower shows an empty thinking block by default and explains why.
+
+To capture the reasoning, start the proxy with request rewriting enabled:
+
+```bash
+WATCHTOWER_REVEAL_THINKING=1 node intercept.mjs
+```
+
+This transparently rewrites Anthropic requests from `display: "omitted"` to `"summarized"`, so the API streams a readable summary of the reasoning — which then appears in the dashboard. Off by default, so the proxy stays byte-for-byte transparent unless you opt in.
+
 ### Logs
 
 All requests are saved to `./logs/` as numbered JSON files:
@@ -131,13 +150,19 @@ Codex CLI    ──HTTP──┘          │              ──HTTPS──>  a
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 22 (uses the built-in crypto/streams; no npm dependencies)
 
 ## Roadmap
 
+Recently shipped:
+
+- ✅ Cost & token tracking
+- ✅ Zero-dependency (dropped the `ws` package)
+- ✅ Transparent gzip pass-through (forwards original bytes to the client)
+- ✅ Reveal hidden extended thinking (request rewriting)
+
 See [TODO.md](TODO.md) for the full roadmap, including planned features like:
 
-- Cost & token tracking
 - Search & filter
 - System prompt diffing
 - Request replay & modification (Burp Suite for Claude)
@@ -150,11 +175,10 @@ Contributions welcome. Open an issue first for anything non-trivial.
 ```bash
 git clone https://github.com/fahd09/watchtower.git
 cd watchtower
-npm install
-npm start
+node intercept.mjs
 ```
 
-The proxy is in `intercept.mjs`, provider logic in `providers/`, and the dashboard is a single `dashboard.html`. No build step, no bundler.
+The proxy is in `intercept.mjs`, the zero-dependency WebSocket server in `ws-server.mjs`, provider logic in `providers/`, and the dashboard is a single `dashboard.html`. No dependencies, no build step, no bundler.
 
 ## License
 
