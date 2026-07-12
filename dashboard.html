@@ -223,6 +223,30 @@
   .turn-stats { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
   .turn-members { border-bottom: 2px solid var(--border); }
 
+  /* ── Diffs ─────────────────────────────────────────── */
+  .diff-summary { padding: 14px; font-size: 12px; color: var(--text-dim); }
+  .diff-header {
+    display: flex; gap: 14px; align-items: center;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    position: sticky; top: 0; background: var(--bg-panel); z-index: 1;
+  }
+  .diff-add-count { color: var(--green); font-weight: 700; }
+  .diff-del-count { color: var(--red); font-weight: 700; }
+  .diff { font-family: var(--mono); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; padding: 6px 0; }
+  .diff-line { padding: 0 14px; }
+  .diff-add { background: rgba(74, 222, 128, 0.14); color: var(--green); }
+  .diff-del { background: rgba(248, 113, 113, 0.14); color: var(--red); }
+  .diff-same { color: var(--text-dim); }
+  .diff-fold { padding: 4px 14px; margin: 2px 0; color: var(--text-dim); font-style: italic; font-size: 10px; text-align: center; background: var(--bg); }
+  .diff-msg { margin: 10px 14px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .diff-msg-add { border-color: var(--green); }
+  .diff-msg-del { border-color: var(--red); opacity: 0.85; }
+  .diff-msg-head { padding: 6px 10px; font-size: 11px; font-weight: 700; font-family: var(--mono); }
+  .diff-msg-add .diff-msg-head { background: rgba(74, 222, 128, 0.14); color: var(--green); }
+  .diff-msg-del .diff-msg-head { background: rgba(248, 113, 113, 0.14); color: var(--red); }
+  .diff-msg .cb-body { padding: 10px; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 11px; max-height: 340px; overflow: auto; }
+
   /* ── Copy buttons ──────────────────────────────────── */
   .has-copy { position: relative; }
   .copy-btn {
@@ -1427,8 +1451,10 @@ function getTabs(req) {
 
   // Content
   if (req.system) tabs.push({ id: 'system', label: 'System', count: Array.isArray(req.system) ? req.system.length : 1 });
+  if (req.system && prevRequestWith(req, 'system')) tabs.push({ id: 'sysdiff', label: 'Sys Diff' });
   if (hasSSE) tabs.push({ id: 'response', label: 'Response' });
   tabs.push({ id: 'conversation', label: 'Messages', count: req.messages?.length || 0 });
+  if (req.messages?.length && prevRequestWith(req, 'messages')) tabs.push({ id: 'turndiff', label: 'Turn Diff' });
   if (req.tools?.length) tabs.push({ id: 'tools', label: 'Tools', count: req.tools.length });
 
   tabs.push({ sep: true });
@@ -1455,6 +1481,162 @@ function switchTab(id) {
   renderDetail();
 }
 
+// ─── Diffs (system prompt & turn) ───────────────────────────────────
+// Nearest earlier chat request of the same provider — the thing we diff against.
+function prevChatRequest(req) {
+  if (!req) return null;
+  let best = null;
+  for (const r of state.requests.values()) {
+    if (r.id >= req.id) continue;
+    if (r.provider && req.provider && r.provider !== req.provider) continue;
+    if (!CHAT_TYPES.has(r.type)) continue;
+    if (!best || r.id > best.id) best = r;
+  }
+  return best;
+}
+function prevRequestWith(req) { return prevChatRequest(req); }
+
+// Fetch full detail for a request that only has summary fields, then call back.
+function ensureLoaded(id, cb) {
+  const r = state.requests.get(id);
+  if (!r) { cb && cb(null); return; }
+  if (r._detailLoaded || r.messages !== undefined || r.system !== undefined) { cb && cb(r); return; }
+  fetch(`/api/request/${id}`).then(x => x.json()).then(d => {
+    const merged = { ...state.requests.get(id), ...d, _detailLoaded: true };
+    state.requests.set(id, merged);
+    cb && cb(merged);
+  }).catch(() => cb && cb(r));
+}
+
+// LCS diff over two key arrays → ops with source indices.
+function lcsOps(aKeys, bKeys) {
+  const n = aKeys.length, m = bKeys.length;
+  if (n * m > 6e6) return prefixSuffixOps(aKeys, bKeys);
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = aKeys[i] === bKeys[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (aKeys[i] === bKeys[j]) { ops.push({ t: 'same', ai: i, bi: j }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: 'del', ai: i, bi: -1 }); i++; }
+    else { ops.push({ t: 'add', ai: -1, bi: j }); j++; }
+  }
+  while (i < n) ops.push({ t: 'del', ai: i++, bi: -1 });
+  while (j < m) ops.push({ t: 'add', ai: -1, bi: j++ });
+  return ops;
+}
+// Cheap fallback for huge inputs: common prefix + suffix, middle is del-then-add.
+function prefixSuffixOps(a, b) {
+  const n = a.length, m = b.length;
+  let p = 0; while (p < n && p < m && a[p] === b[p]) p++;
+  let s = 0; while (s < n - p && s < m - p && a[n - 1 - s] === b[m - 1 - s]) s++;
+  const ops = [];
+  for (let i = 0; i < p; i++) ops.push({ t: 'same', ai: i, bi: i });
+  for (let i = p; i < n - s; i++) ops.push({ t: 'del', ai: i, bi: -1 });
+  for (let j = p; j < m - s; j++) ops.push({ t: 'add', ai: -1, bi: j });
+  for (let k = 0; k < s; k++) ops.push({ t: 'same', ai: n - s + k, bi: m - s + k });
+  return ops;
+}
+
+function systemToText(system) {
+  if (system == null) return '';
+  if (typeof system === 'string') return system;
+  if (Array.isArray(system)) return system.map(b => typeof b === 'string' ? b : (b.text || JSON.stringify(b))).join('\n');
+  return JSON.stringify(system, null, 2);
+}
+function contentToText(content) {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map(b => {
+    if (b == null) return '';
+    if (typeof b === 'string') return b;
+    if (b.type === 'text' || b.text != null) return b.text || '';
+    if (b.type === 'thinking') return '[thinking] ' + (b.thinking || '');
+    if (b.type === 'tool_use') return `[tool_use ${b.name || ''}] ` + JSON.stringify(b.input ?? b.rawJson ?? '');
+    if (b.type === 'tool_result') return `[tool_result] ` + (typeof b.content === 'string' ? b.content : JSON.stringify(b.content || ''));
+    return JSON.stringify(b);
+  }).join('\n');
+  return JSON.stringify(content);
+}
+function msgKey(m) { return (m?.role || '') + '\n' + contentToText(m?.content); }
+
+function diffHeaderHtml(prevId, curId, adds, dels, unit) {
+  return `<div class="diff-header">
+    <span>#${prevId} → #${curId}</span>
+    <span class="diff-add-count">+${adds}</span>
+    <span class="diff-del-count">−${dels}</span>
+    <span style="color:var(--text-dim)">${unit}</span>
+  </div>`;
+}
+
+function renderSysDiff(req) {
+  const prev = prevChatRequest(req);
+  if (!prev) return '<div class="empty-state"><div>No previous request to diff against.</div></div>';
+  if (prev.system === undefined && !prev._detailLoaded) {
+    ensureLoaded(prev.id, () => { if (state.selectedId === req.id && state.activeTab === 'sysdiff') renderDetail(); });
+    return '<div class="empty-state"><div>Loading previous request…</div></div>';
+  }
+  const aLines = systemToText(prev.system).split('\n');
+  const bLines = systemToText(req.system).split('\n');
+  const ops = lcsOps(aLines, bLines);
+  let adds = 0, dels = 0;
+  for (const o of ops) { if (o.t === 'add') adds++; else if (o.t === 'del') dels++; }
+  if (adds === 0 && dels === 0) return `<div class="diff-summary">System prompt is identical to #${prev.id}.</div>`;
+
+  let html = diffHeaderHtml(prev.id, req.id, adds, dels, 'lines');
+  html += '<div class="diff">';
+  let sameRun = [];
+  const flush = () => {
+    if (sameRun.length > 6) {
+      html += `<div class="diff-fold">⋯ ${sameRun.length} unchanged lines ⋯</div>`;
+    } else {
+      for (const s of sameRun) html += `<div class="diff-line diff-same">  ${esc(s)}</div>`;
+    }
+    sameRun = [];
+  };
+  for (const o of ops) {
+    if (o.t === 'same') sameRun.push(aLines[o.ai]);
+    else if (o.t === 'add') { flush(); html += `<div class="diff-line diff-add">+ ${esc(bLines[o.bi])}</div>`; }
+    else { flush(); html += `<div class="diff-line diff-del">− ${esc(aLines[o.ai])}</div>`; }
+  }
+  flush();
+  html += '</div>';
+  return html;
+}
+
+function renderTurnDiff(req) {
+  const prev = prevChatRequest(req);
+  if (!prev) return '<div class="empty-state"><div>No previous request to diff against.</div></div>';
+  if (prev.messages === undefined && !prev._detailLoaded) {
+    ensureLoaded(prev.id, () => { if (state.selectedId === req.id && state.activeTab === 'turndiff') renderDetail(); });
+    return '<div class="empty-state"><div>Loading previous request…</div></div>';
+  }
+  const a = prev.messages || [], b = req.messages || [];
+  const ops = lcsOps(a.map(msgKey), b.map(msgKey));
+  let adds = 0, dels = 0;
+  for (const o of ops) { if (o.t === 'add') adds++; else if (o.t === 'del') dels++; }
+  if (adds === 0 && dels === 0) return `<div class="diff-summary">Message history is identical to #${prev.id}.</div>`;
+
+  let html = diffHeaderHtml(prev.id, req.id, adds, dels, 'messages');
+  let sameRun = 0;
+  const flush = () => { if (sameRun > 0) { html += `<div class="diff-fold">⋯ ${sameRun} unchanged message${sameRun > 1 ? 's' : ''} ⋯</div>`; sameRun = 0; } };
+  const card = (m, kind) => {
+    const sign = kind === 'add' ? '+ added' : '− removed';
+    return `<div class="diff-msg diff-msg-${kind}">
+      <div class="diff-msg-head">${sign} · ${esc(m?.role || '?')}</div>
+      <div class="cb-body">${esc(contentToText(m?.content))}</div>
+    </div>`;
+  };
+  for (const o of ops) {
+    if (o.t === 'same') sameRun++;
+    else if (o.t === 'add') { flush(); html += card(b[o.bi], 'add'); }
+    else { flush(); html += card(a[o.ai], 'del'); }
+  }
+  flush();
+  return html;
+}
+
 function renderTabContent(req) {
   const el = document.getElementById('tabContent');
 
@@ -1467,6 +1649,8 @@ function renderTabContent(req) {
     case 'stream': el.innerHTML = renderStream(req); break;
     case 'headers': el.innerHTML = renderHeaders(req); break;
     case 'ratelimits': el.innerHTML = renderRateLimits(req); break;
+    case 'sysdiff': el.innerHTML = renderSysDiff(req); break;
+    case 'turndiff': el.innerHTML = renderTurnDiff(req); break;
     case 'raw': el.innerHTML = renderRaw(req); break;
     default: el.innerHTML = '';
   }
