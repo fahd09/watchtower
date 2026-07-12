@@ -23,6 +23,7 @@ AI coding agents make dozens of API calls per interaction — streaming messages
 - **Search & filter** — full-text search across models, types, tools, and message content; hide `token_count`/`quota_check` noise; show errors only
 - **Conversation grouping** — fold each turn's utility calls and subagents under its main request
 - **System-prompt & turn diffs** — see exactly what changed vs the previous request
+- **Replay & breakpoints** — re-send a captured request (optionally edited), or pause requests in-flight to edit or drop them ("Burp Suite for Claude")
 - **Copy buttons** on every JSON block, system prompt, and message
 - Agent hierarchy tracking (main agent → subagents → utility calls)
 - Token usage, rate limits, and timing
@@ -113,6 +114,14 @@ Each request is tagged with an agent role:
 
 The header bar shows the running **token count** and **estimated cost** for the whole session, computed from each model's list price. Every request also shows its own cost in the Overview and Response tabs. Cache reads (~0.1×) and cache writes (~1.25×) are priced separately from fresh input. Unknown models show `—` instead of a wrong number.
 
+### Replay & Breakpoints
+
+**Replay** — open any captured request, click **Replay / edit request**, tweak the body (system, messages, tools, parameters), and send it upstream reusing the original request's auth. The result is captured as a new request tagged with a ↻ badge. Great for reproducing issues or A/B-testing a prompt change.
+
+**Breakpoints** — flip the **Breakpoints** toggle in the sidebar and chat requests pause *before* being forwarded. A modal shows the request body: edit it and **Forward**, or **Drop** it entirely (the client gets a 499). Like Burp Suite, but for AI agents. Off by default; if the dashboard disconnects, breakpoints auto-disable and any paused requests are released so nothing hangs.
+
+> Replays and edited/dropped requests use the real upstream auth, which Watchtower keeps **in memory only** — never written to the JSON logs.
+
 ### Reveal hidden thinking
 
 On recent models (Opus 4.8/4.7, Sonnet 5, Fable 5), Claude Code requests extended thinking with `display: "omitted"` — the model reasons, but the API returns only a cryptographic signature, not the thinking text. Watchtower shows an empty thinking block by default and explains why.
@@ -166,15 +175,16 @@ Recently shipped:
 - ✅ Search & filter (sidebar) + copy buttons
 - ✅ Conversation grouping (fold each turn's requests into one unit)
 - ✅ System-prompt diff & turn diff (what changed vs the previous request)
+- ✅ Request replay & breakpoints (edit/drop in-flight — Burp Suite for Claude)
 - ✅ Zero-dependency (dropped the `ws` package)
 - ✅ Transparent gzip pass-through (forwards original bytes to the client)
 - ✅ Reveal hidden extended thinking (request rewriting)
 
 Planned:
 
-- Request replay & modification (Burp Suite for Claude)
 - Agent hierarchy tree visualization
 - Export (session/request as JSON, HAR, or HTML)
+- TTFT / tokens-per-sec and context-window gauge
 
 ## Contributing
 
