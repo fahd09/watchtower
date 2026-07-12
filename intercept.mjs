@@ -178,6 +178,7 @@ function buildRecord({ reqId, provider, method, url, realHeaders, parsed, decode
   if (mutation) log("INFO", `#${reqId} request rewritten (${mutation})`);
   broadcast("request_start", {
     id: reqId,
+    startTime,
     provider: provider.name,
     method,
     url,

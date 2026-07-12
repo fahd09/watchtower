@@ -224,6 +224,12 @@
   .turn-stats { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
   .turn-members { border-bottom: 2px solid var(--border); }
 
+  /* ── Context gauge ─────────────────────────────────── */
+  .gauge-row { display: flex; align-items: center; gap: 12px; }
+  .gauge-track { flex: 1; height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; }
+  .gauge-fill { height: 100%; border-radius: 5px; transition: width 0.3s ease; }
+  .gauge-label { font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+
   /* ── Replay modal ──────────────────────────────────── */
   .modal-overlay {
     display: none;
@@ -1936,6 +1942,47 @@ function sessionTotals() {
   return { cost, tokens, priced };
 }
 
+// ─── Observability: context window & latency/throughput ─────────────
+// Max context window (input tokens) per model, longest-id-match wins.
+const CONTEXT_WINDOW = [
+  ['claude-opus-4-8', 1e6], ['claude-opus-4-7', 1e6], ['claude-opus-4-6', 1e6],
+  ['claude-sonnet-5', 1e6], ['claude-sonnet-4-6', 1e6], ['claude-fable-5', 1e6], ['claude-mythos-5', 1e6],
+  ['claude-haiku-4-5', 2e5], ['claude-3', 2e5],
+  ['gpt-4.1', 1e6], ['gpt-4o', 128e3], ['o3', 2e5], ['o1', 2e5], ['gpt-5', 4e5],
+];
+function contextFor(model) {
+  if (!model) return null;
+  const m = String(model).toLowerCase();
+  let best = null;
+  for (const [k, v] of CONTEXT_WINDOW) if (m.includes(k) && (!best || k.length > best[0].length)) best = [k, v];
+  return best ? best[1] : null;
+}
+
+// Timestamp of the first generated content token across providers.
+function firstTokenTs(req) {
+  for (const e of (req.sseEvents || [])) {
+    const dt = e.data?.delta?.type;
+    if (e.type === 'content_block_delta' && (dt === 'text_delta' || dt === 'thinking_delta')) return e.ts;
+    if (e.type === 'response.output_text.delta') return e.ts;
+    if (e.data?.choices?.[0]?.delta?.content) return e.ts;
+  }
+  return null;
+}
+
+// TTFT (ms), throughput (output tokens/sec), and generation window.
+function computePerf(req) {
+  const evs = req.sseEvents || [];
+  if (!evs.length || !req.startTime) return null;
+  const ftt = firstTokenTs(req);
+  const lastTs = evs[evs.length - 1].ts;
+  const u = usageTokens(getMergedUsage(req));
+  const out = u ? u.outTok : 0;
+  const ttft = ftt != null ? ftt - req.startTime : null;
+  const genMs = ftt != null ? lastTs - ftt : null;
+  const tps = (ftt != null && lastTs > ftt && out > 0) ? out / ((lastTs - ftt) / 1000) : null;
+  return { ttft, tps, out, genMs };
+}
+
 function getUsage(req) {
   // Anthropic: message_delta or message_start event
   const msgDelta = req.sseEvents?.find(e => e.type === 'message_delta');
@@ -2088,6 +2135,32 @@ function renderOverview(req) {
     if (oCost != null) {
       html += `<div class="kv-key">estimated cost</div><div class="kv-val" style="color: var(--green); font-weight: 700">${fmtCost(oCost)}</div>`;
     }
+    html += `</div></div></div>`;
+  }
+
+  // ── Context window gauge ──
+  const maxCtx = contextFor(req.model);
+  const ut = usageTokens(getMergedUsage(req));
+  if (maxCtx && ut && (ut.inTok + ut.cacheRead + ut.cacheWrite) > 0) {
+    const prompt = ut.inTok + ut.cacheRead + ut.cacheWrite;
+    const pct = Math.min(100, prompt / maxCtx * 100);
+    const color = pct < 50 ? 'var(--green)' : pct < 80 ? 'var(--orange)' : 'var(--red)';
+    html += `<div class="section"><div class="section-header">Context Window</div><div class="section-body">
+      <div class="gauge-row">
+        <div class="gauge-track"><div class="gauge-fill" style="width:${pct.toFixed(1)}%; background:${color}"></div></div>
+        <div class="gauge-label">${prompt.toLocaleString()} / ${maxCtx.toLocaleString()} <span style="color:${color}">(${pct.toFixed(1)}%)</span></div>
+      </div>
+    </div></div>`;
+  }
+
+  // ── Performance (TTFT & throughput) ──
+  const perf = computePerf(req);
+  if (perf && (perf.ttft != null || perf.tps != null)) {
+    html += `<div class="section"><div class="section-header">Performance</div><div class="section-body"><div class="kv-grid">`;
+    if (perf.ttft != null) html += `<div class="kv-key">Time to first token</div><div class="kv-val" style="color: var(--cyan); font-weight: 700">${perf.ttft.toLocaleString()} ms</div>`;
+    if (perf.tps != null) html += `<div class="kv-key">Throughput</div><div class="kv-val" style="color: var(--cyan); font-weight: 700">${perf.tps.toFixed(1)} tok/s</div>`;
+    if (perf.genMs != null) html += `<div class="kv-key">Generation time</div><div class="kv-val">${perf.genMs.toLocaleString()} ms</div>`;
+    if (perf.out) html += `<div class="kv-key">Output tokens</div><div class="kv-val">${perf.out.toLocaleString()}</div>`;
     html += `</div></div></div>`;
   }
 
