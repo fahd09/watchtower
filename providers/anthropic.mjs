@@ -26,6 +26,23 @@ export default {
     return "unknown";
   },
 
+  // Optional request rewrite: make hidden extended-thinking visible.
+  // On Opus 4.8/4.7, Sonnet 5, Fable 5 the client (e.g. Claude Code) sends
+  // thinking.display = "omitted", so the API streams thinking blocks with an
+  // empty `thinking` field and only a signature_delta — nothing to show. Flip
+  // it to "summarized" and the API streams a readable summary as thinking_delta
+  // events, which assembleResponse already reconstructs. Returns a new body if
+  // it changed anything, otherwise null.
+  revealThinking(body) {
+    if (!body || typeof body !== "object") return null;
+    const t = body.thinking;
+    if (!t || typeof t !== "object") return null;
+    // Only touch adaptive thinking; leave "enabled"/"disabled" alone.
+    if (t.type !== "adaptive") return null;
+    if (t.display && t.display !== "omitted") return null; // already visible
+    return { ...body, thinking: { ...t, display: "summarized" } };
+  },
+
   extractRequestFields(body) {
     if (!body || typeof body !== "object") return {};
     return {
