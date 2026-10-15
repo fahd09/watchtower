@@ -36,10 +36,12 @@ function detectProvider(req) {
   if (auth.includes("sk-ant-")) return providers.anthropic;
   // Anthropic URL patterns
   if (req.url.startsWith("/v1/messages") || req.url.startsWith("/v1/count_tokens")) return providers.anthropic;
-  // OpenAI / Codex: known headers, endpoints, or key patterns
-  if (req.headers["originator"]?.includes("codex")) return providers.openai;
+  // OpenAI / Codex: known headers, endpoints, or key patterns.
+  // originator is matched case-insensitively — Codex Desktop sends
+  // "Codex Desktop", while the Codex CLI sends "codex_cli_rs".
+  if (req.headers["originator"]?.toLowerCase().includes("codex")) return providers.openai;
   if (req.headers["x-codex-turn-metadata"]) return providers.openai;
-  if (req.url.startsWith("/v1/chat/") || req.url.startsWith("/v1/models")) return providers.openai;
+  if (req.url.startsWith("/v1/chat/") || req.url.startsWith("/v1/models") || req.url.startsWith("/models")) return providers.openai;
   if (req.url.startsWith("/v1/responses") || req.url === "/responses") return providers.openai;
   if (auth.includes("Bearer sk-")) return providers.openai;
   return providers.anthropic; // backward compatible default
