@@ -24,6 +24,11 @@ const LOG_DIR = path.join(process.cwd(), "logs");
 // Off by default so the proxy is byte-for-byte transparent unless asked.
 const REVEAL_THINKING = /^(1|true|yes|on)$/i.test(process.env.WATCHTOWER_REVEAL_THINKING || "");
 
+// Optional upstream credential for local gateway use. This lets a client send
+// a disposable gateway key while Watchtower uses the real Anthropic API key
+// only for the outbound hop. It is never written to request logs.
+const UPSTREAM_ANTHROPIC_API_KEY = process.env.WATCHTOWER_UPSTREAM_ANTHROPIC_API_KEY || "";
+
 const providers = { anthropic: anthropicProvider, openai: openaiProvider };
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -36,6 +41,9 @@ function detectProvider(req) {
   if (auth.includes("sk-ant-")) return providers.anthropic;
   // Anthropic URL patterns
   if (req.url.startsWith("/v1/messages") || req.url.startsWith("/v1/count_tokens")) return providers.anthropic;
+  // Claude Desktop may use Bearer auth for its optional /v1/models probe.
+  // Anthropic's version header disambiguates that route from Codex/OpenAI.
+  if (req.headers["anthropic-version"]) return providers.anthropic;
   // OpenAI / Codex: known headers, endpoints, or key patterns.
   // originator is matched case-insensitively — Codex Desktop sends
   // "Codex Desktop", while the Codex CLI sends "codex_cli_rs".
@@ -45,6 +53,15 @@ function detectProvider(req) {
   if (req.url.startsWith("/v1/responses") || req.url === "/responses") return providers.openai;
   if (auth.includes("Bearer sk-")) return providers.openai;
   return providers.anthropic; // backward compatible default
+}
+
+function applyUpstreamAuth(provider, headers) {
+  const forwarded = { ...headers };
+  if (provider.name === "anthropic" && UPSTREAM_ANTHROPIC_API_KEY) {
+    delete forwarded.authorization;
+    forwarded["x-api-key"] = UPSTREAM_ANTHROPIC_API_KEY;
+  }
+  return forwarded;
 }
 
 // ─── In-memory store ────────────────────────────────────────────────
@@ -353,7 +370,7 @@ function replayRequest({ originalId, editedBody }) {
   const parsed = tryParseJson(bodyStr);
   const bodyBuffer = Buffer.from(bodyStr, "utf-8");
 
-  const headers = { ...realHeaders };
+  const headers = applyUpstreamAuth(provider, realHeaders);
   const resolved = provider.resolveTarget ? provider.resolveTarget(headers) : { target: provider.target, pathPrefix: provider.pathPrefix };
   let targetPath = orig.url;
   if (resolved.pathPrefix && !targetPath.startsWith(resolved.pathPrefix)) targetPath = resolved.pathPrefix + targetPath;
@@ -459,7 +476,7 @@ const proxyServer = http.createServer(async (req, res) => {
   });
 
   // Build forward headers (transparent pass-through: keep accept-encoding).
-  const proxyHeaders = { ...req.headers };
+  const proxyHeaders = applyUpstreamAuth(provider, req.headers);
   delete proxyHeaders["host"];
   proxyHeaders["host"] = targetUrl.host;
   if (mutation) {

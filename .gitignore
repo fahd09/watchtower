@@ -22,3 +22,6 @@ TODO.md
 
 # Captured internal agent prompts (local inspection only)
 captured-prompts.md
+
+# Captured proxy traffic (local inspection only)
+logs_user_*/
